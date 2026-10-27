@@ -27,6 +27,7 @@
 #include <openssl/sha.h>
 
 // local includes
+#include "app_sync.h"
 #include "config.h"
 #include "crypto.h"
 #include "display_device.h"
@@ -1353,24 +1354,30 @@ namespace proc {
         apps.emplace_back(std::move(ctx));
       }
 
-      // Live-sync installed Steam games as launchable headless SteamOS apps:
-      // launching one brings up the same session as Steam Headless and then
-      // starts the game inside it. User-defined apps win on name collision.
-      // Set PRISM_STEAM_SYNC=0 to disable (used by tests).
-      if (const char *sync = std::getenv("PRISM_STEAM_SYNC"); sync == nullptr || std::string_view(sync) != "0"sv) {
+      // Live-sync the installed Steam games and GUI applications that the
+      // app_sync_* settings list. A Steam game starts the same session as Steam
+      // Headless and then the game inside it; a desktop application starts a
+      // private headless session that only runs the application. Apps defined
+      // above win on name collision.
+      {
         std::set<std::string> app_names;
         for (const auto &app : apps) {
           app_names.insert(app.name);
         }
-        for (const auto &game : prism::steam::installed_games()) {
-          if (app_names.count(game.name) != 0) {
+        for (const auto &entry : prism::sync::visible(prism::sync::scan(), config::app_sync_snapshot())) {
+          if (!app_names.insert(entry.name).second) {
             continue;
           }
           proc::ctx_t ctx;
-          ctx.name = game.name;
-          ctx.cmd = "steam steam://rungameid/"s + std::to_string(game.appid);
-          ctx.prism_capture = "steamos"s;
-          ctx.image_path = prism::steam::box_art_png(game.appid, game.box_art).string();
+          ctx.name = entry.name;
+          ctx.cmd = entry.command;
+          if (entry.category == prism::sync::category_e::steam) {
+            ctx.prism_capture = "steamos"s;
+            ctx.image_path = prism::steam::box_art_png(entry.steam_appid, entry.box_art).string();
+          } else {
+            ctx.prism_capture = "headless"s;
+            ctx.image_path = entry.icon.string();
+          }
           ctx.elevated = false;
           ctx.auto_detach = true;
           ctx.wait_all = true;

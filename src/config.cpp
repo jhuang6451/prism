@@ -9,6 +9,8 @@
 #include <fstream>
 #include <functional>
 #include <iostream>
+#include <mutex>
+#include <set>
 #include <thread>
 #include <unordered_map>
 #include <utility>
@@ -531,6 +533,26 @@ namespace config {
     {},  // prep commands
   };
 
+  namespace {
+    /**
+     * @brief Get the default application sync settings: Steam games are listed, other apps need to be selected.
+     *
+     * @return The defaults.
+     */
+    app_sync_t app_sync_defaults() {
+      return {
+        app_sync_mode_e::all,  // Steam games
+        app_sync_mode_e::selected,  // Flatpak apps
+        app_sync_mode_e::selected,  // system apps
+        {},  // selected application IDs
+      };
+    }
+
+    app_sync_t app_sync = app_sync_defaults();  ///< Live application sync settings.
+
+    std::mutex app_sync_mutex;  ///< Guards app_sync, which the Web UI can replace while the server reads it.
+  }  // namespace
+
   /**
    * @brief Return whether a character terminates a configuration line.
    *
@@ -681,6 +703,171 @@ namespace config {
     }
 
     return vars;
+  }
+
+  std::string set_options(std::string_view content, const std::vector<std::pair<std::string, std::string>> &options) {
+    std::string result;
+    result.reserve(content.size() + 256);
+    std::set<std::string> handled;
+
+    auto copied = content.begin();  // first character not yet written to the result
+    auto pos = content.begin();
+    const auto end = content.end();
+    while (pos < end) {
+      const auto start = std::find_if_not(pos, end, whitespace);
+      TUPLE_2D(endl, var, parse_option(pos, end));
+
+      pos = endl;
+      if (pos != end) {
+        pos += (*pos == '\r' && pos + 1 != end) ? 2 : 1;
+      }
+      if (!var) {
+        continue;
+      }
+
+      const std::string key = var->first;
+      const auto option = std::find_if(options.begin(), options.end(), [&key](const auto &candidate) {
+        return candidate.first == key;
+      });
+      if (option == options.end()) {
+        continue;
+      }
+
+      result.append(copied, start);
+      if (option->second.empty() || !handled.insert(key).second) {
+        copied = pos;  // drop the option together with its line terminator
+      } else {
+        result.append(key).append(" = ").append(option->second);
+        copied = endl;  // keep the original line terminator
+      }
+    }
+    result.append(copied, end);
+
+    for (const auto &[key, value] : options) {
+      if (value.empty() || handled.contains(key)) {
+        continue;
+      }
+      if (!result.empty() && result.back() != '\n') {
+        result += '\n';
+      }
+      result.append(key).append(" = ").append(value).append("\n");
+    }
+    return result;
+  }
+
+  std::string_view app_sync_mode_name(app_sync_mode_e mode) {
+    if (mode == app_sync_mode_e::all) {
+      return "all"sv;
+    }
+    return mode == app_sync_mode_e::selected ? "selected"sv : "none"sv;
+  }
+
+  std::optional<app_sync_mode_e> parse_app_sync_mode(std::string_view name) {
+    std::string text {name};
+    text.erase(0, text.find_first_not_of(" \t\r\n\"'"));
+    text.erase(text.find_last_not_of(" \t\r\n\"'") + 1);
+    std::transform(text.begin(), text.end(), text.begin(), [](unsigned char c) {
+      return static_cast<char>(std::tolower(c));
+    });
+    for (const auto mode : {app_sync_mode_e::all, app_sync_mode_e::selected, app_sync_mode_e::none}) {
+      if (text == app_sync_mode_name(mode)) {
+        return mode;
+      }
+    }
+    return std::nullopt;
+  }
+
+  bool valid_app_id(std::string_view id) {
+    const auto colon = id.find(':');
+    if (colon == std::string_view::npos || colon + 1 == id.size()) {
+      return false;
+    }
+    const auto category = id.substr(0, colon);
+    const auto name = id.substr(colon + 1);
+    const auto is_digit = [](char c) {
+      return c >= '0' && c <= '9';
+    };
+    if (category == "steam"sv) {
+      return name.size() <= 10 && std::all_of(name.begin(), name.end(), is_digit);
+    }
+    if (category != "flatpak"sv && category != "system"sv) {
+      return false;
+    }
+    return std::all_of(name.begin(), name.end(), [&is_digit](char c) {
+      return is_digit(c) || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '.' || c == '_' || c == '+' || c == '@' || c == '-';
+    });
+  }
+
+  namespace {
+    /**
+     * @brief Clean up a list of application IDs read from the configuration file or the Web UI.
+     *
+     * Surrounding blanks and quotes are removed, invalid IDs are dropped and duplicates keep
+     * their first position.
+     *
+     * @param ids IDs to clean up.
+     * @param warn Whether to log every dropped ID.
+     * @return The valid, unique IDs.
+     */
+    std::vector<std::string> normalize_app_ids(const std::vector<std::string> &ids, bool warn) {
+      std::vector<std::string> result;
+      std::set<std::string> seen;
+      for (auto id : ids) {
+        id.erase(0, id.find_first_not_of(" \t\r\n\"'"));
+        id.erase(id.find_last_not_of(" \t\r\n\"'") + 1);
+        if (id.empty()) {
+          continue;
+        }
+        if (!valid_app_id(id)) {
+          if (warn) {
+            BOOST_LOG(warning) << "config: ignoring invalid app_sync_selected entry ["sv << id << ']';
+          }
+          continue;
+        }
+        if (seen.insert(id).second) {
+          result.push_back(std::move(id));
+        }
+      }
+      return result;
+    }
+  }  // namespace
+
+  bool reload_app_sync() {
+    std::ifstream in {prism.config_file};
+    if (std::error_code ec; !in || !fs::is_regular_file(prism.config_file, ec)) {
+      return false;
+    }
+
+    auto vars = parse_config(std::string {std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()});
+    auto settings = app_sync_defaults();
+    parse_app_sync(vars, settings);
+    set_app_sync(std::move(settings));
+    return true;
+  }
+
+  app_sync_t app_sync_snapshot() {
+    std::lock_guard lock {app_sync_mutex};
+    return app_sync;
+  }
+
+  void set_app_sync(app_sync_t settings) {
+    settings.selected = normalize_app_ids(settings.selected, false);
+    std::lock_guard lock {app_sync_mutex};
+    app_sync = std::move(settings);
+  }
+
+  std::vector<std::pair<std::string, std::string>> app_sync_options(const app_sync_t &settings) {
+    std::string selected {"["};
+    for (std::size_t i = 0; i < settings.selected.size(); ++i) {
+      selected.append(i == 0 ? "\n  " : ",\n  ").append(settings.selected[i]);
+    }
+    selected.append(settings.selected.empty() ? "]" : "\n]");
+    return {
+      {"app_sync_steam", std::string {app_sync_mode_name(settings.steam)}},
+      {"app_sync_flatpak", std::string {app_sync_mode_name(settings.flatpak)}},
+      {"app_sync_system", std::string {app_sync_mode_name(settings.system)}},
+      {"app_sync_selected", std::move(selected)},
+    };
   }
 
   /**
@@ -965,6 +1152,22 @@ namespace config {
   }
 
   /**
+   * @brief Convert an application sync mode setting, keeping the current mode when the name is unknown.
+   *
+   * @param name Configuration key being converted, for the warning.
+   * @param text Configured mode name.
+   * @param current Mode to keep when the name is unknown.
+   * @return The configured mode, or the current one.
+   */
+  app_sync_mode_e app_sync_mode_or(const std::string &name, const std::string &text, app_sync_mode_e current) {
+    if (const auto mode = parse_app_sync_mode(text)) {
+      return *mode;
+    }
+    BOOST_LOG(warning) << "config: unknown "sv << name << " value ["sv << text << "]; ignoring"sv;
+    return current;
+  }
+
+  /**
    * @brief Consume a floating-point setting from the parsed configuration map.
    *
    * @param vars Parsed configuration entries; consumed keys are erased.
@@ -1052,6 +1255,20 @@ namespace config {
     if (pos != begin) {
       input.emplace_back(begin, pos);
     }
+  }
+
+  void parse_app_sync(std::unordered_map<std::string, std::string> &vars, app_sync_t &settings) {
+    generic_f(vars, "app_sync_steam", settings.steam, [&settings](const std::string &text) {
+      return app_sync_mode_or("app_sync_steam", text, settings.steam);
+    });
+    generic_f(vars, "app_sync_flatpak", settings.flatpak, [&settings](const std::string &text) {
+      return app_sync_mode_or("app_sync_flatpak", text, settings.flatpak);
+    });
+    generic_f(vars, "app_sync_system", settings.system, [&settings](const std::string &text) {
+      return app_sync_mode_or("app_sync_system", text, settings.system);
+    });
+    list_string_f(vars, "app_sync_selected", settings.selected);
+    settings.selected = normalize_app_ids(settings.selected, true);
   }
 
   /**
@@ -1359,6 +1576,11 @@ namespace config {
       BOOST_LOG(warning) << "config: unknown prism_capture_default value ["sv << stream.prism_capture_default << "]; ignoring"sv;
       stream.prism_capture_default.clear();
     }
+
+    // Applications synced into the client list: the settings that the App Sync page edits.
+    auto sync = app_sync_snapshot();
+    parse_app_sync(vars, sync);
+    set_app_sync(std::move(sync));
 #ifndef __ANDROID__
     // TODO: Android can possibly support this
     if (!fs::exists(stream.file_apps.c_str())) {

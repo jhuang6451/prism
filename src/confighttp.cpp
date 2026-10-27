@@ -23,6 +23,7 @@
 #include <Simple-Web-Server/server_https.hpp>
 
 // local includes
+#include "app_sync.h"
 #include "config.h"
 #include "confighttp.h"
 #include "crypto.h"
@@ -604,6 +605,28 @@ namespace confighttp {
   }
 
   /**
+   * @brief List the Steam games that the app sync settings show in the Applications tab.
+   *
+   * @param file_apps Applications of apps.json; games named like one of them are left out.
+   * @return The games in the order they are appended after the file applications.
+   */
+  std::vector<prism::sync::entry_t> synced_steam_games(const nlohmann::json &file_apps) {
+    std::set<std::string> app_names;
+    for (const auto &app : file_apps) {
+      if (app.contains("name")) {
+        app_names.insert(app["name"].get<std::string>());
+      }
+    }
+    std::vector<prism::sync::entry_t> games;
+    for (auto &entry : prism::sync::visible(prism::sync::scan(), config::app_sync_snapshot())) {
+      if (entry.category == prism::sync::category_e::steam && app_names.insert(entry.name).second) {
+        games.push_back(std::move(entry));
+      }
+    }
+    return games;
+  }
+
+  /**
    * @brief Get the list of available applications.
    * @param response The HTTP response object.
    * @param request The HTTP request object.
@@ -618,6 +641,7 @@ namespace confighttp {
     print_req(request);
 
     try {
+      config::reload_app_sync();
       std::string content = file_handler::read_file(config::stream.file_apps.c_str());
       nlohmann::json file_tree = nlohmann::json::parse(content);
 
@@ -656,32 +680,22 @@ namespace confighttp {
         }
       }
 
-      // Merge installed Steam games (live-synced, not stored in apps.json) so
-      // they show up in the Applications tab. They are appended after the file
-      // apps, so the indexes of the file apps are unchanged; entries are marked
-      // with "prism-steam" so the UI can treat them as generated.
-      {
-        std::set<std::string> app_names;
-        for (const auto &app : file_tree["apps"]) {
-          if (app.contains("name")) {
-            app_names.insert(app["name"].get<std::string>());
-          }
+      // Merge the Steam games that the app sync settings list (live-synced, not
+      // stored in apps.json) so they show up in the Applications tab. They are
+      // appended after the file apps, so the indexes of the file apps are
+      // unchanged; entries are marked with "prism-steam" so the UI can treat
+      // them as generated.
+      for (const auto &game : synced_steam_games(file_tree["apps"])) {
+        nlohmann::json app;
+        app["name"] = game.name;
+        app["cmd"] = game.command;
+        app["prism-capture"] = "steamos";
+        app["prism-steam"] = true;
+        app["auto-detach"] = true;
+        if (const auto png = prism::steam::box_art_png(game.steam_appid, game.box_art); !png.empty()) {
+          app["image-path"] = png.string();
         }
-        for (const auto &game : prism::steam::installed_games()) {
-          if (app_names.count(game.name) != 0) {
-            continue;
-          }
-          nlohmann::json app;
-          app["name"] = game.name;
-          app["cmd"] = "steam steam://rungameid/" + std::to_string(game.appid);
-          app["prism-capture"] = "steamos";
-          app["prism-steam"] = true;
-          app["auto-detach"] = true;
-          if (const auto png = prism::steam::box_art_png(game.appid, game.box_art); !png.empty()) {
-            app["image-path"] = png.string();
-          }
-          file_tree["apps"].push_back(app);
-        }
+        file_tree["apps"].push_back(app);
       }
 
       send_response(response, file_tree);
@@ -1090,6 +1104,154 @@ namespace confighttp {
     send_response(response, output_tree);
   }
 
+  nlohmann::json build_app_sync_state(const std::vector<prism::sync::entry_t> &entries, const config::app_sync_t &settings) {
+    nlohmann::json categories = nlohmann::json::array();
+    for (const auto category : {prism::sync::category_e::steam, prism::sync::category_e::flatpak, prism::sync::category_e::system}) {
+      nlohmann::json apps = nlohmann::json::array();
+      for (const auto &entry : entries) {
+        if (entry.category == category) {
+          apps.push_back({
+            {"id", entry.id},
+            {"name", entry.name},
+            {"selected", std::find(settings.selected.begin(), settings.selected.end(), entry.id) != settings.selected.end()},
+          });
+        }
+      }
+      categories.push_back({
+        {"id", std::string {prism::sync::category_name(category)}},
+        {"mode", std::string {config::app_sync_mode_name(prism::sync::mode_of(category, settings))}},
+        {"apps", std::move(apps)},
+      });
+    }
+
+    nlohmann::json state;
+    state["status"] = true;
+    state["categories"] = std::move(categories);
+    state["selected"] = settings.selected;
+    return state;
+  }
+
+  std::string parse_app_sync_update(const nlohmann::json &input, config::app_sync_t &settings) {
+    if (!input.is_object()) {
+      return "Expected a JSON object";
+    }
+
+    auto updated = settings;
+    const std::pair<const char *, config::app_sync_mode_e *> modes[] = {
+      {"steam", &updated.steam},
+      {"flatpak", &updated.flatpak},
+      {"system", &updated.system},
+    };
+    for (const auto &[key, mode] : modes) {
+      if (!input.contains(key)) {
+        continue;
+      }
+      const auto parsed = input[key].is_string() ? config::parse_app_sync_mode(input[key].get<std::string>()) : std::nullopt;
+      if (!parsed) {
+        return std::format("Invalid mode for \"{}\"; use all, selected or none", key);
+      }
+      *mode = *parsed;
+    }
+
+    if (input.contains("selected")) {
+      if (!input["selected"].is_array()) {
+        return "\"selected\" must be an array of application IDs";
+      }
+      updated.selected.clear();
+      for (const auto &item : input["selected"]) {
+        if (!item.is_string() || !config::valid_app_id(item.get<std::string>())) {
+          return std::format("Invalid application ID: {}", item.dump());
+        }
+        if (const auto &id = item.get_ref<const std::string &>(); std::find(updated.selected.begin(), updated.selected.end(), id) == updated.selected.end()) {
+          updated.selected.push_back(id);
+        }
+      }
+    }
+
+    settings = std::move(updated);
+    return {};
+  }
+
+  /**
+   * @brief Get the discovered applications and the app sync settings.
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   *
+   * @api_examples{/api/app-sync| GET| null}
+   */
+  void getAppSync(const resp_https_t &response, const req_https_t &request) {
+    if (!authenticate(response, request)) {
+      return;
+    }
+
+    print_req(request);
+
+    config::reload_app_sync();
+    send_response(response, build_app_sync_state(prism::sync::scan(), config::app_sync_snapshot()));
+  }
+
+  /**
+   * @brief Save the app sync settings to the configuration file and apply them.
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   * The body for the POST request should be JSON serialized in the following format; omitted keys keep their value:
+   * @code{.json}
+   * {
+   *   "steam": "all",
+   *   "flatpak": "selected",
+   *   "system": "none",
+   *   "selected": ["flatpak:org.mozilla.firefox", "system:org.kde.dolphin"]
+   * }
+   * @endcode
+   *
+   * @note{Only the app_sync_* options of the configuration file are rewritten; comments and other options stay as they are.
+   * The update is applied on top of the file's current content, so manual edits are not overwritten.}
+   *
+   * @api_examples{/api/app-sync| POST| {"flatpak":"selected","selected":["flatpak:org.mozilla.firefox"]}}
+   */
+  void saveAppSync(const resp_https_t &response, const req_https_t &request) {
+    if (!check_content_type(response, request, "application/json")) {
+      return;
+    }
+    if (!authenticate(response, request)) {
+      return;
+    }
+
+    std::string client_id = get_client_id(request);
+    if (!validate_csrf_token(response, request, client_id)) {
+      return;
+    }
+
+    print_req(request);
+
+    std::stringstream ss;
+    ss << request->content.rdbuf();
+    try {
+      config::reload_app_sync();
+      auto settings = config::app_sync_snapshot();
+      if (const auto error = parse_app_sync_update(nlohmann::json::parse(ss), settings); !error.empty()) {
+        bad_request(response, request, error);
+        return;
+      }
+
+      const auto content = file_handler::read_file(config::prism.config_file.c_str());
+      if (file_handler::write_file(config::prism.config_file.c_str(), config::set_options(content, config::app_sync_options(settings))) != 0) {
+        bad_request(response, request, "Failed to write the configuration file");
+        return;
+      }
+
+      config::set_app_sync(std::move(settings));
+      proc::refresh_apps(config::stream.file_apps);
+
+      nlohmann::json output_tree;
+      output_tree["status"] = true;
+      send_response(response, output_tree);
+    } catch (std::exception &e) {
+      BOOST_LOG(warning) << "SaveAppSync: "sv << e.what();
+      bad_request(response, request, e.what());
+    }
+  }
+
   /**
    * @brief Get the configuration settings.
    * @param response The HTTP response object.
@@ -1210,6 +1372,7 @@ namespace confighttp {
     try {
       const int index = std::stoi(request->path_match[1]);
 
+      config::reload_app_sync();
       std::string file = file_handler::read_file(config::stream.file_apps.c_str());
       nlohmann::json file_tree = nlohmann::json::parse(file);
       auto &apps = file_tree["apps"];
@@ -1224,21 +1387,9 @@ namespace confighttp {
       } else if (index >= static_cast<int>(apps.size())) {
         // Generated Steam apps are appended after the file apps (same order as
         // GET /api/apps); resolve the cover from Steam's art cache.
-        std::set<std::string> app_names;
-        for (const auto &app : apps) {
-          if (app.contains("name")) {
-            app_names.insert(app["name"].get<std::string>());
-          }
-        }
-        int steam_index = index - static_cast<int>(apps.size());
-        for (const auto &game : prism::steam::installed_games()) {
-          if (app_names.count(game.name) != 0) {
-            continue;
-          }
-          if (steam_index-- == 0) {
-            app_image_path = prism::steam::box_art_png(game.appid, game.box_art).string();
-            break;
-          }
+        const auto games = synced_steam_games(apps);
+        if (const auto steam_index = static_cast<std::size_t>(index) - apps.size(); steam_index < games.size()) {
+          app_image_path = prism::steam::box_art_png(games[steam_index].steam_appid, games[steam_index].box_art).string();
         }
       } else {
         bad_request(response, request, "index out of range");
@@ -1826,6 +1977,7 @@ namespace confighttp {
 
     // web pages
     server.resource["^/$"]["GET"] = page_handler("index.html");
+    server.resource["^/app-sync/?$"]["GET"] = page_handler("app-sync.html");
     server.resource["^/apps/?$"]["GET"] = page_handler("apps.html");
     server.resource["^/clients/?$"]["GET"] = page_handler("clients.html");
     server.resource["^/config/?$"]["GET"] = page_handler("config.html");
@@ -1837,6 +1989,8 @@ namespace confighttp {
 
     // rest api
     server.resource["^/api/browse$"]["GET"] = browseDirectory;
+    server.resource["^/api/app-sync$"]["GET"] = getAppSync;
+    server.resource["^/api/app-sync$"]["POST"] = saveAppSync;
     server.resource["^/api/apps$"]["GET"] = getApps;
     server.resource["^/api/audio-sinks$"]["GET"] = getAudioSinks;
     server.resource["^/api/apps$"]["POST"] = saveApp;

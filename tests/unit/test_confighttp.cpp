@@ -16,6 +16,8 @@
 #include <format>
 #include <fstream>
 #include <iostream>
+#include <map>
+#include <optional>
 #include <thread>
 
 // lib imports
@@ -307,6 +309,34 @@ protected:
                                                   const std::shared_ptr<SimpleWeb::ServerBase<SimpleWeb::HTTPS>::Request> &request
                                                 ) {
       confighttp::browseDirectory(response, request);
+    };
+
+    // Add routes to test the generated Steam entries of the Applications tab
+    server->resource["^/apps-test$"]["GET"] = [](
+                                                const std::shared_ptr<SimpleWeb::ServerBase<SimpleWeb::HTTPS>::Response> &response,
+                                                const std::shared_ptr<SimpleWeb::ServerBase<SimpleWeb::HTTPS>::Request> &request
+                                              ) {
+      confighttp::getApps(response, request);
+    };
+    server->resource["^/cover-test/([0-9]+)$"]["GET"] = [](
+                                                          const std::shared_ptr<SimpleWeb::ServerBase<SimpleWeb::HTTPS>::Response> &response,
+                                                          const std::shared_ptr<SimpleWeb::ServerBase<SimpleWeb::HTTPS>::Request> &request
+                                                        ) {
+      confighttp::getCover(response, request);
+    };
+
+    // Add routes to test the app sync endpoints
+    server->resource["^/app-sync-test$"]["GET"] = [](
+                                                    const std::shared_ptr<SimpleWeb::ServerBase<SimpleWeb::HTTPS>::Response> &response,
+                                                    const std::shared_ptr<SimpleWeb::ServerBase<SimpleWeb::HTTPS>::Request> &request
+                                                  ) {
+      confighttp::getAppSync(response, request);
+    };
+    server->resource["^/app-sync-test$"]["POST"] = [](
+                                                     const std::shared_ptr<SimpleWeb::ServerBase<SimpleWeb::HTTPS>::Response> &response,
+                                                     const std::shared_ptr<SimpleWeb::ServerBase<SimpleWeb::HTTPS>::Request> &request
+                                                   ) {
+      confighttp::saveAppSync(response, request);
     };
 
     // Start server
@@ -1307,4 +1337,431 @@ TEST_F(BrowseDirectoryTest, BuildBrowseEntries_NonexistentDirectory_ReturnsEmpty
   const auto entries = confighttp::build_browse_entries("/prism_nonexistent_dir_xyz_99999", "any");
   ASSERT_TRUE(entries.is_array());
   ASSERT_TRUE(entries.empty());
+}
+
+// Test: build_app_sync_state groups the entries by category and reports the selection
+TEST(AppSyncState, GroupsEntriesByCategory) {
+  const auto entries = prism::sync::make_entries(
+    {{730, "Counter-Strike 2", {}}},
+    {
+      {"firefox", "Firefox", "firefox", {}, true},
+      {"kate", "Kate", "kate", {}, false},
+      {"dolphin", "Dolphin", "dolphin", {}, false},
+    }
+  );
+  const config::app_sync_t settings {
+    config::app_sync_mode_e::all,
+    config::app_sync_mode_e::none,
+    config::app_sync_mode_e::selected,
+    {"system:kate", "flatpak:uninstalled"},
+  };
+
+  const auto state = confighttp::build_app_sync_state(entries, settings);
+  EXPECT_TRUE(state["status"].get<bool>());
+  EXPECT_EQ(state["selected"], (nlohmann::json {"system:kate", "flatpak:uninstalled"}));
+
+  ASSERT_EQ(state["categories"].size(), 3);
+  const auto &steam = state["categories"][0];
+  EXPECT_EQ(steam["id"], "steam");
+  EXPECT_EQ(steam["mode"], "all");
+  ASSERT_EQ(steam["apps"].size(), 1);
+  EXPECT_EQ(steam["apps"][0], (nlohmann::json {{"id", "steam:730"}, {"name", "Counter-Strike 2"}, {"selected", false}}));
+
+  const auto &flatpak = state["categories"][1];
+  EXPECT_EQ(flatpak["id"], "flatpak");
+  EXPECT_EQ(flatpak["mode"], "none");
+  EXPECT_EQ(flatpak["apps"][0]["id"], "flatpak:firefox");
+
+  const auto &system = state["categories"][2];
+  EXPECT_EQ(system["id"], "system");
+  EXPECT_EQ(system["mode"], "selected");
+  ASSERT_EQ(system["apps"].size(), 2);
+  EXPECT_EQ(system["apps"][0]["id"], "system:kate");
+  EXPECT_TRUE(system["apps"][0]["selected"].get<bool>());
+  EXPECT_EQ(system["apps"][1]["id"], "system:dolphin");
+  EXPECT_FALSE(system["apps"][1]["selected"].get<bool>());
+}
+
+TEST(AppSyncState, EmptyWhenNothingIsInstalled) {
+  const auto state = confighttp::build_app_sync_state({}, {config::app_sync_mode_e::all, config::app_sync_mode_e::selected, config::app_sync_mode_e::selected, {}});
+
+  ASSERT_EQ(state["categories"].size(), 3);
+  for (const auto &category : state["categories"]) {
+    EXPECT_TRUE(category["apps"].empty());
+  }
+  EXPECT_TRUE(state["selected"].empty());
+}
+
+// Test: parse_app_sync_update applies valid updates and leaves omitted keys alone
+TEST(AppSyncUpdate, AppliesGivenKeysOnly) {
+  config::app_sync_t settings {config::app_sync_mode_e::all, config::app_sync_mode_e::selected, config::app_sync_mode_e::none, {"steam:730"}};
+
+  EXPECT_EQ(confighttp::parse_app_sync_update(nlohmann::json {{"flatpak", "ALL"}}, settings), "");
+  EXPECT_EQ(settings.steam, config::app_sync_mode_e::all);
+  EXPECT_EQ(settings.flatpak, config::app_sync_mode_e::all);
+  EXPECT_EQ(settings.system, config::app_sync_mode_e::none);
+  EXPECT_EQ(settings.selected, (std::vector<std::string> {"steam:730"}));
+
+  EXPECT_EQ(
+    confighttp::parse_app_sync_update(nlohmann::json {{"steam", "none"}, {"system", "selected"}, {"selected", {"system:kate", "system:kate", "steam:440"}}}, settings),
+    ""
+  );
+  EXPECT_EQ(settings.steam, config::app_sync_mode_e::none);
+  EXPECT_EQ(settings.system, config::app_sync_mode_e::selected);
+  EXPECT_EQ(settings.selected, (std::vector<std::string> {"system:kate", "steam:440"}));
+
+  EXPECT_EQ(confighttp::parse_app_sync_update(nlohmann::json {{"selected", nlohmann::json::array()}}, settings), "");
+  EXPECT_TRUE(settings.selected.empty());
+}
+
+TEST(AppSyncUpdate, RejectsInvalidInputAndKeepsTheSettings) {
+  const config::app_sync_t original {config::app_sync_mode_e::all, config::app_sync_mode_e::selected, config::app_sync_mode_e::none, {"steam:730"}};
+
+  const std::pair<nlohmann::json, std::string> cases[] = {
+    {nlohmann::json::array(), "Expected a JSON object"},
+    {nlohmann::json("text"), "Expected a JSON object"},
+    {nlohmann::json {{"steam", "sometimes"}}, "Invalid mode for \"steam\""},
+    {nlohmann::json {{"flatpak", 3}}, "Invalid mode for \"flatpak\""},
+    {nlohmann::json {{"system", nullptr}}, "Invalid mode for \"system\""},
+    {nlohmann::json {{"selected", "steam:730"}}, "\"selected\" must be an array"},
+    {nlohmann::json {{"selected", {"steam:730", "nonsense"}}}, "Invalid application ID: \"nonsense\""},
+    {nlohmann::json {{"selected", {7}}}, "Invalid application ID: 7"},
+    {nlohmann::json {{"steam", "none"}, {"selected", {"bad id"}}}, "Invalid application ID"},
+  };
+  for (const auto &[input, message] : cases) {
+    auto settings = original;
+    const auto error = confighttp::parse_app_sync_update(input, settings);
+    EXPECT_NE(error.find(message), std::string::npos) << input.dump() << " -> " << error;
+    EXPECT_EQ(settings.steam, original.steam) << input.dump();
+    EXPECT_EQ(settings.selected, original.selected) << input.dump();
+  }
+}
+
+/**
+ * @brief Test fixture for the app sync endpoints, which read and write a temporary configuration file.
+ */
+class AppSyncHttpTest: public ConfigHttpTest {  // NOSONAR(cpp:S3656): protected members are intentional for test fixture subclassing
+protected:
+  std::string saved_config_file;
+  std::string saved_file_apps;
+  config::app_sync_t saved_app_sync;
+  std::filesystem::path config_path;
+  std::map<std::string, std::optional<std::string>> saved_env;
+
+  void SetUp() override {
+    ConfigHttpTest::SetUp();
+    saved_config_file = config::prism.config_file;
+    saved_file_apps = config::stream.file_apps;
+    saved_app_sync = config::app_sync_snapshot();
+
+    config_path = test_web_dir / "prism.conf";
+    config::prism.config_file = config_path.string();
+    config::stream.file_apps = (test_web_dir / "apps.json").string();
+    write_config("# My Prism settings\nport = 1234\napp_sync_steam = all\n\n# keep this note\nlocale = en\n");
+    config::set_app_sync({config::app_sync_mode_e::all, config::app_sync_mode_e::selected, config::app_sync_mode_e::selected, {}});
+  }
+
+  void TearDown() override {
+    for (const auto &[name, old_value] : saved_env) {
+      if (old_value) {
+        setenv(name.c_str(), old_value->c_str(), 1);
+      } else {
+        unsetenv(name.c_str());
+      }
+    }
+    config::set_app_sync(saved_app_sync);
+    config::stream.file_apps = saved_file_apps;
+    config::prism.config_file = saved_config_file;
+    ConfigHttpTest::TearDown();
+  }
+
+  /**
+   * @brief Replace the test configuration file.
+   *
+   * @param text New content.
+   */
+  void write_config(const std::string &text) const {
+    std::ofstream(config_path, std::ios::trunc) << text;
+  }
+
+  /**
+   * @brief Read the test configuration file.
+   *
+   * @return The file content.
+   */
+  std::string read_config() const {
+    std::ifstream in(config_path);
+    return {std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
+  }
+
+  /**
+   * @brief Get headers for an authenticated JSON POST that passes CSRF validation.
+   *
+   * @return Request headers.
+   */
+  /**
+   * @brief Get headers for an authenticated GET.
+   *
+   * @return Request headers.
+   */
+  SimpleWeb::CaseInsensitiveMultimap get_headers() const {
+    SimpleWeb::CaseInsensitiveMultimap headers;
+    headers.emplace("Authorization", create_auth_header("testuser", "testpass"));
+    return headers;
+  }
+
+  /**
+   * @brief Set an environment variable until the test ends.
+   *
+   * @param name Variable name.
+   * @param value New value.
+   */
+  void set_env(const std::string &name, const std::string &value) {
+    if (saved_env.count(name) == 0) {
+      const char *old_value = std::getenv(name.c_str());
+      saved_env[name] = old_value != nullptr ? std::optional<std::string> {old_value} : std::nullopt;
+    }
+    setenv(name.c_str(), value.c_str(), 1);
+  }
+
+  /**
+   * @brief Install fake Steam games and an apps.json with one file application.
+   *
+   * Steam's library cache gets local box art, so nothing is downloaded, and the
+   * game 730 gets an already converted cover.
+   */
+  void install_steam_games() {
+    const auto root = test_web_dir / "home" / ".steam" / "root";
+    for (const auto &[appid, name] : {std::pair {"730", "Counter-Strike 2"}, std::pair {"440", "Team Fortress 2"}}) {
+      std::filesystem::create_directories(root / "steamapps");
+      std::filesystem::create_directories(root / "appcache" / "librarycache" / appid);
+      std::ofstream(root / "appcache" / "librarycache" / appid / "library_600x900.jpg") << "not a real jpeg";
+      std::ofstream(root / "steamapps" / std::format("appmanifest_{}.acf", appid)) << std::format("\"AppState\"\n{{\n\t\"appid\"\t\t\"{}\"\n\t\"name\"\t\t\"{}\"\n}}\n", appid, name);
+    }
+    const auto covers = test_web_dir / "cache" / "prism" / "covers";
+    std::filesystem::create_directories(covers);
+    std::ofstream(covers / "730.png", std::ios::binary) << "\x89PNG\r\n\x1a\n";
+    std::filesystem::last_write_time(covers / "730.png", std::filesystem::file_time_type::clock::now() + std::chrono::hours(1));
+
+    set_env("HOME", (test_web_dir / "home").string());
+    set_env("XDG_CACHE_HOME", (test_web_dir / "cache").string());
+    std::ofstream(config::stream.file_apps) << R"json({"env": {}, "apps": [{"name": "My App", "cmd": "mine"}]})json";
+  }
+
+  /**
+   * @brief Get the application names of GET /api/apps.
+   *
+   * @return Names in list order.
+   */
+  std::vector<std::string> listed_app_names() {
+    const auto response = client->request("GET", "/apps-test", "", get_headers());
+    std::vector<std::string> names;
+    for (const auto &app : nlohmann::json::parse(response->content.string())["apps"]) {
+      names.push_back(app["name"].get<std::string>());
+    }
+    return names;
+  }
+
+  SimpleWeb::CaseInsensitiveMultimap post_headers() {
+    SimpleWeb::CaseInsensitiveMultimap headers;
+    headers.emplace("Authorization", create_auth_header("testuser", "testpass"));
+    const auto token_response = client->request("GET", "/csrf-token-test", "", headers);
+    headers.emplace("X-CSRF-Token", nlohmann::json::parse(token_response->content.string())["csrf_token"].get<std::string>());
+    headers.emplace("Content-Type", "application/json");
+    return headers;
+  }
+};
+
+TEST_F(AppSyncHttpTest, GetRequiresAuthentication) {
+  const auto response = client->request("GET", "/app-sync-test");
+  ASSERT_EQ(response->status_code, "401 Unauthorized");
+}
+
+TEST_F(AppSyncHttpTest, GetDescribesTheCategoriesAndSettings) {
+  write_config("app_sync_steam = none\napp_sync_flatpak = all\napp_sync_system = selected\napp_sync_selected = [system:kate]\n");
+  SimpleWeb::CaseInsensitiveMultimap headers;
+  headers.emplace("Authorization", create_auth_header("testuser", "testpass"));
+
+  const auto response = client->request("GET", "/app-sync-test", "", headers);
+  ASSERT_EQ(response->status_code, "200 OK");
+  assert_security_headers(response);
+
+  const auto state = nlohmann::json::parse(response->content.string());
+  EXPECT_TRUE(state["status"].get<bool>());
+  EXPECT_EQ(state["selected"], (nlohmann::json {"system:kate"}));
+  ASSERT_EQ(state["categories"].size(), 3);
+  EXPECT_EQ(state["categories"][0]["id"], "steam");
+  EXPECT_EQ(state["categories"][0]["mode"], "none");
+  EXPECT_EQ(state["categories"][1]["id"], "flatpak");
+  EXPECT_EQ(state["categories"][1]["mode"], "all");
+  EXPECT_EQ(state["categories"][2]["id"], "system");
+  EXPECT_EQ(state["categories"][2]["mode"], "selected");
+}
+
+TEST_F(AppSyncHttpTest, GetShowsManualEditsOfTheConfigurationFile) {
+  SimpleWeb::CaseInsensitiveMultimap headers;
+  headers.emplace("Authorization", create_auth_header("testuser", "testpass"));
+  const auto first = nlohmann::json::parse(client->request("GET", "/app-sync-test", "", headers)->content.string());
+  EXPECT_EQ(first["categories"][0]["mode"], "all");
+
+  write_config("app_sync_steam = none\n");
+  const auto second = nlohmann::json::parse(client->request("GET", "/app-sync-test", "", headers)->content.string());
+  EXPECT_EQ(second["categories"][0]["mode"], "none");
+  EXPECT_EQ(second["categories"][1]["mode"], "selected");  // not in the file: default
+}
+
+TEST_F(AppSyncHttpTest, SaveRequiresAuthentication) {
+  SimpleWeb::CaseInsensitiveMultimap headers;
+  headers.emplace("Content-Type", "application/json");
+
+  const auto response = client->request("POST", "/app-sync-test", "{}", headers);
+  ASSERT_EQ(response->status_code, "401 Unauthorized");
+}
+
+TEST_F(AppSyncHttpTest, SaveRequiresJsonContent) {
+  SimpleWeb::CaseInsensitiveMultimap headers;
+  headers.emplace("Authorization", create_auth_header("testuser", "testpass"));
+
+  const auto response = client->request("POST", "/app-sync-test", "{}", headers);
+  ASSERT_EQ(response->status_code, "400 Bad Request");
+  ASSERT_TRUE(response->content.string().find("Content type not provided") != std::string::npos);
+}
+
+TEST_F(AppSyncHttpTest, SaveWritesTheConfigurationFileAndAppliesTheSettings) {
+  const nlohmann::json body {
+    {"steam", "selected"},
+    {"flatpak", "none"},
+    {"system", "all"},
+    {"selected", {"steam:730", "flatpak:org.mozilla.firefox"}},
+  };
+
+  const auto response = client->request("POST", "/app-sync-test", body.dump(), post_headers());
+  ASSERT_EQ(response->status_code, "200 OK");
+  EXPECT_TRUE(nlohmann::json::parse(response->content.string())["status"].get<bool>());
+
+  // Applied to the running server ...
+  const auto live = config::app_sync_snapshot();
+  EXPECT_EQ(live.steam, config::app_sync_mode_e::selected);
+  EXPECT_EQ(live.flatpak, config::app_sync_mode_e::none);
+  EXPECT_EQ(live.system, config::app_sync_mode_e::all);
+  EXPECT_EQ(live.selected, (std::vector<std::string> {"steam:730", "flatpak:org.mozilla.firefox"}));
+
+  // ... and written to the file, which keeps its other content ...
+  const auto written = read_config();
+  EXPECT_TRUE(written.find("# My Prism settings\nport = 1234\napp_sync_steam = selected\n") == 0) << written;
+  EXPECT_NE(written.find("# keep this note\nlocale = en\n"), std::string::npos) << written;
+
+  // ... so that a restart reads the same settings back.
+  auto vars = config::parse_config(written);
+  config::app_sync_t restored {config::app_sync_mode_e::all, config::app_sync_mode_e::all, config::app_sync_mode_e::all, {}};
+  config::parse_app_sync(vars, restored);
+  EXPECT_EQ(restored.steam, live.steam);
+  EXPECT_EQ(restored.flatpak, live.flatpak);
+  EXPECT_EQ(restored.system, live.system);
+  EXPECT_EQ(restored.selected, live.selected);
+  EXPECT_EQ(vars.at("port"), "1234");
+}
+
+TEST_F(AppSyncHttpTest, SaveKeepsManualEditsOfOtherAppSyncOptions) {
+  write_config("# edited by hand\napp_sync_flatpak = all\napp_sync_selected = [system:kate]\n");
+
+  const auto response = client->request("POST", "/app-sync-test", R"({"steam":"none"})", post_headers());
+  ASSERT_EQ(response->status_code, "200 OK");
+
+  const auto written = read_config();
+  EXPECT_TRUE(written.find("# edited by hand\n") == 0) << written;
+  auto vars = config::parse_config(written);
+  config::app_sync_t saved_settings {config::app_sync_mode_e::all, config::app_sync_mode_e::none, config::app_sync_mode_e::none, {}};
+  config::parse_app_sync(vars, saved_settings);
+  EXPECT_EQ(saved_settings.steam, config::app_sync_mode_e::none);
+  EXPECT_EQ(saved_settings.flatpak, config::app_sync_mode_e::all);
+  EXPECT_EQ(saved_settings.selected, (std::vector<std::string> {"system:kate"}));
+}
+
+TEST_F(AppSyncHttpTest, SaveCreatesTheConfigurationFileWhenMissing) {
+  std::filesystem::remove(config_path);
+
+  const auto response = client->request("POST", "/app-sync-test", R"({"system":"none"})", post_headers());
+  ASSERT_EQ(response->status_code, "200 OK");
+
+  auto vars = config::parse_config(read_config());
+  EXPECT_EQ(vars.at("app_sync_system"), "none");
+  EXPECT_EQ(vars.at("app_sync_steam"), "all");
+}
+
+TEST_F(AppSyncHttpTest, SaveRejectsInvalidInputWithoutChangingAnything) {
+  const auto before = read_config();
+
+  for (const std::string body : {R"({"steam":"sometimes"})", R"({"selected":["nonsense"]})", "[]", "not json"}) {
+    const auto response = client->request("POST", "/app-sync-test", body, post_headers());
+    EXPECT_EQ(response->status_code, "400 Bad Request") << body;
+    EXPECT_EQ(read_config(), before) << body;
+    EXPECT_EQ(config::app_sync_snapshot().steam, config::app_sync_mode_e::all) << body;
+  }
+}
+
+TEST_F(AppSyncHttpTest, SaveReportsAnUnwritableConfigurationFile) {
+  config::prism.config_file = (test_web_dir / "missing-dir" / "prism.conf").string();
+
+  const auto response = client->request("POST", "/app-sync-test", R"({"steam":"none"})", post_headers());
+  ASSERT_EQ(response->status_code, "400 Bad Request");
+  ASSERT_TRUE(response->content.string().find("Failed to write the configuration file") != std::string::npos);
+  EXPECT_EQ(config::app_sync_snapshot().steam, config::app_sync_mode_e::all);
+}
+
+TEST_F(AppSyncHttpTest, ApplicationsTabListsTheSteamGamesTheSettingsShow) {
+  install_steam_games();
+
+  write_config("app_sync_steam = all\n");
+  EXPECT_EQ(listed_app_names(), (std::vector<std::string> {"My App", "Counter-Strike 2", "Team Fortress 2"}));
+
+  write_config("app_sync_steam = selected\napp_sync_selected = [steam:440]\n");
+  EXPECT_EQ(listed_app_names(), (std::vector<std::string> {"My App", "Team Fortress 2"}));
+
+  write_config("app_sync_steam = none\napp_sync_selected = [steam:440]\n");
+  EXPECT_EQ(listed_app_names(), (std::vector<std::string> {"My App"}));
+}
+
+TEST_F(AppSyncHttpTest, ApplicationsTabMarksGeneratedSteamGames) {
+  install_steam_games();
+  write_config("app_sync_steam = all\n");
+
+  const auto response = client->request("GET", "/apps-test", "", get_headers());
+  const auto apps = nlohmann::json::parse(response->content.string())["apps"];
+  ASSERT_EQ(apps.size(), 3);
+  EXPECT_FALSE(apps[0].contains("prism-steam"));
+  EXPECT_TRUE(apps[1]["prism-steam"].get<bool>());
+  EXPECT_EQ(apps[1]["cmd"], "steam steam://rungameid/730");
+  EXPECT_EQ(apps[1]["prism-capture"], "steamos");
+  EXPECT_TRUE(apps[1]["auto-detach"].get<bool>());
+  EXPECT_TRUE(apps[1].contains("image-path"));  // the converted cover of game 730
+  EXPECT_FALSE(apps[2].contains("image-path"));  // no ffmpeg conversion in the test
+}
+
+TEST_F(AppSyncHttpTest, ApplicationsTabLeavesOutSteamGamesNamedLikeAFileApp) {
+  install_steam_games();
+  std::ofstream(config::stream.file_apps) << R"json({"env": {}, "apps": [{"name": "Team Fortress 2", "cmd": "mine"}, {"name": "No Name Clash"}]})json";
+  write_config("app_sync_steam = all\n");
+
+  EXPECT_EQ(listed_app_names(), (std::vector<std::string> {"Team Fortress 2", "No Name Clash", "Counter-Strike 2"}));
+}
+
+TEST_F(AppSyncHttpTest, CoverOfASyncedSteamGameFollowsTheAppsTabOrder) {
+  install_steam_games();
+  write_config("app_sync_steam = selected\napp_sync_selected = [steam:730]\n");
+
+  // Index 0 is the file app (no image); index 1 is the only listed Steam game.
+  EXPECT_EQ(client->request("GET", "/cover-test/0", "", get_headers())->status_code, "404 Not Found");
+  const auto cover = client->request("GET", "/cover-test/1", "", get_headers());
+  EXPECT_EQ(cover->status_code, "200 OK");
+  EXPECT_EQ(cover->header.find("Content-Type")->second, "image/png");
+  // Past the last listed game there is nothing; game 440 is not listed.
+  EXPECT_EQ(client->request("GET", "/cover-test/2", "", get_headers())->status_code, "404 Not Found");
+}
+
+TEST_F(AppSyncHttpTest, CoverOfAHiddenSteamGameIsNotFound) {
+  install_steam_games();
+  write_config("app_sync_steam = none\n");
+
+  EXPECT_EQ(client->request("GET", "/cover-test/1", "", get_headers())->status_code, "404 Not Found");
 }

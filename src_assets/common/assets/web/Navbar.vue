@@ -30,6 +30,12 @@
               </a>
             </li>
             <li class="nav-item">
+              <a class="nav-link text-nowrap" href="./app-sync">
+                <LayoutGrid :size="18" class="icon"></LayoutGrid>
+                {{ $t('navbar.app_sync') }}
+              </a>
+            </li>
+            <li class="nav-item">
               <a class="nav-link" href="./config">
                 <Settings :size="18" class="icon"></Settings>
                 {{ $t('navbar.configuration') }}
@@ -76,7 +82,7 @@
 </template>
 
 <script>
-import { CircleUserRound, Home, Info, Layers, Lock, LogOut, Settings, Shield } from '@lucide/vue'
+import { CircleUserRound, Home, Info, Layers, LayoutGrid, Lock, LogOut, Settings, Shield } from '@lucide/vue'
 import ThemeToggle from './ThemeToggle.vue'
 import Notification from './Notification.vue'
 
@@ -87,6 +93,7 @@ export default {
     Home,
     Lock,
     Layers,
+    LayoutGrid,
     Settings,
     Shield,
     Info,

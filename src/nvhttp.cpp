@@ -964,6 +964,7 @@ namespace nvhttp {
     // uninstalls show up in the client without a Prism restart. Only the
     // app list is replaced; a running app must keep its launch state (a
     // client requests the applist right after backing out of a stream).
+    config::reload_app_sync();
     proc::refresh_apps(config::stream.file_apps);
 
     pt::ptree tree;

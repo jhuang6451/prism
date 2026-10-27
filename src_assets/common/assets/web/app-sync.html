@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="en" data-bs-theme="auto">
+
+<head>
+  <%- header %>
+  <style>
+    .app-sync-list {
+      max-height: 22rem;
+      overflow-y: auto;
+    }
+  </style>
+</head>
+
+<body id="app" v-cloak>
+  <Navbar></Navbar>
+  <div id="content" class="container">
+    <div class="my-4">
+      <h1>{{ $t('app_sync.title') }}</h1>
+      <p>{{ $t('app_sync.desc') }}</p>
+      <p class="form-text">{{ $t('app_sync.config_hint') }}</p>
+    </div>
+
+    <div v-if="loadFailed" class="alert alert-danger" role="alert">{{ $t('app_sync.load_failed') }}</div>
+
+    <template v-else-if="loaded">
+      <!-- Actions toolbar -->
+      <div class="toolbar apps-toolbar d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+        <div class="d-flex align-items-center gap-2">
+          <button class="btn btn-primary" :disabled="!dirty || saving" @click="save">
+            <save :size="18" class="icon"></save>
+            {{ $t('_common.save') }}
+          </button>
+          <button class="btn btn-outline-secondary" :disabled="!dirty || saving" @click="discard">
+            <rotate-ccw :size="18" class="icon"></rotate-ccw>
+            {{ $t('app_sync.discard') }}
+          </button>
+          <span v-if="dirty" class="text-warning">{{ $t('app_sync.unsaved') }}</span>
+        </div>
+        <div class="input-group">
+          <input type="text" class="form-control" v-model="searchQuery" :placeholder="$t('app_sync.search_placeholder')" />
+          <button v-if="searchQuery" class="btn btn-outline-secondary" type="button" @click="searchQuery = ''" :aria-label="$t('_common.close')">
+            <x :size="16" class="icon"></x>
+          </button>
+          <span v-else class="input-group-text">
+            <search :size="16" class="icon"></search>
+          </span>
+        </div>
+      </div>
+
+      <div v-if="missingIds.length > 0" class="alert alert-info" role="alert">
+        {{ $t('app_sync.missing_note', { count: missingIds.length }) }}
+      </div>
+
+      <!-- One card per category -->
+      <div v-for="category in categories" :key="category.id" class="card mb-4" :id="'category-' + category.id">
+        <div class="card-header d-flex flex-wrap justify-content-between align-items-center gap-2">
+          <div>
+            <h2 class="h5 mb-0">
+              <component :is="categoryIcon(category.id)" :size="20" class="icon me-1"></component>
+              {{ $t('app_sync.category_' + category.id) }}
+              <span class="badge text-bg-secondary ms-1">{{ $t('app_sync.listed_count', { listed: listedCount(category), total: category.apps.length }) }}</span>
+            </h2>
+            <div class="form-text mt-1">{{ $t('app_sync.category_' + category.id + '_desc') }}</div>
+          </div>
+          <div class="btn-group" role="group" :aria-label="$t('app_sync.category_' + category.id)">
+            <template v-for="mode in modes" :key="mode">
+              <input type="radio" class="btn-check" :name="'mode-' + category.id" :id="'mode-' + category.id + '-' + mode"
+                     :value="mode" v-model="category.mode" autocomplete="off" />
+              <label class="btn btn-outline-primary" :for="'mode-' + category.id + '-' + mode">{{ $t('app_sync.mode_' + mode) }}</label>
+            </template>
+          </div>
+        </div>
+
+        <div class="card-body">
+          <p v-if="category.apps.length === 0" class="text-muted mb-0">{{ $t('app_sync.empty') }}</p>
+          <p v-else-if="category.mode === 'all'" class="mb-0">{{ $t('app_sync.mode_all_desc') }}</p>
+          <p v-else-if="category.mode === 'none'" class="mb-0">{{ $t('app_sync.mode_none_desc') }}</p>
+          <template v-else>
+            <div class="d-flex flex-wrap gap-2 mb-2">
+              <button class="btn btn-sm btn-outline-secondary" @click="setAll(category, true)">{{ $t('app_sync.select_all') }}</button>
+              <button class="btn btn-sm btn-outline-secondary" @click="setAll(category, false)">{{ $t('app_sync.clear') }}</button>
+            </div>
+            <p v-if="filteredApps(category).length === 0" class="text-muted mb-0">{{ $t('app_sync.no_match') }}</p>
+            <div class="app-sync-list">
+              <div v-for="app in filteredApps(category)" :key="app.id" class="form-check">
+                <input class="form-check-input" type="checkbox" :id="'app-' + app.id" v-model="checked[app.id]" />
+                <label class="form-check-label" :for="'app-' + app.id">
+                  {{ app.name }}
+                  <small class="text-muted ms-1">{{ app.id }}</small>
+                </label>
+              </div>
+            </div>
+          </template>
+        </div>
+      </div>
+    </template>
+  </div>
+</body>
+
+<script type="module">
+  import { createApp } from 'vue'
+  import { initApp } from './init'
+  import Navbar from './Navbar.vue'
+  import { apiFetch } from './fetch_utils'
+  import { notifyKey } from './Notification.vue'
+  import {
+    AppWindow,
+    Gamepad2,
+    Package,
+    RotateCcw,
+    Save,
+    Search,
+    X,
+  } from '@lucide/vue'
+
+  const CATEGORY_ICONS = { steam: 'Gamepad2', flatpak: 'Package', system: 'AppWindow' }
+
+  const app = createApp({
+    components: {
+      Navbar,
+      AppWindow,
+      Gamepad2,
+      Package,
+      RotateCcw,
+      Save,
+      Search,
+      X,
+    },
+    data() {
+      return {
+        loaded: false,
+        loadFailed: false,
+        saving: false,
+        modes: ['all', 'selected', 'none'],
+        categories: [],
+        checked: {}, // application ID -> whether it is in app_sync_selected
+        missingIds: [], // selected IDs of applications that are not installed; kept when saving
+        original: '',
+        searchQuery: '',
+      }
+    },
+    computed: {
+      dirty() {
+        return this.loaded && JSON.stringify(this.payload()) !== this.original
+      },
+    },
+    created() {
+      this.load()
+    },
+    methods: {
+      categoryIcon(id) {
+        return CATEGORY_ICONS[id]
+      },
+      /**
+       * The request body for POST /api/app-sync, which is also the shape of the saved configuration.
+       */
+      payload() {
+        const body = {}
+        const selected = [...this.missingIds]
+        for (const category of this.categories) {
+          body[category.id] = category.mode
+          for (const entry of category.apps) {
+            if (this.checked[entry.id]) {
+              selected.push(entry.id)
+            }
+          }
+        }
+        body.selected = selected
+        return body
+      },
+      load() {
+        return fetch('./api/app-sync')
+          .then((response) => response.json())
+          .then((state) => {
+            this.categories = state.categories
+            const installed = new Set()
+            const checked = {}
+            for (const category of state.categories) {
+              for (const entry of category.apps) {
+                installed.add(entry.id)
+                checked[entry.id] = entry.selected
+              }
+            }
+            this.checked = checked
+            this.missingIds = state.selected.filter((id) => !installed.has(id))
+            this.original = JSON.stringify(this.payload())
+            this.loaded = true
+          })
+          .catch(() => {
+            this.loadFailed = true
+          })
+      },
+      discard() {
+        this.loaded = false
+        return this.load()
+      },
+      save() {
+        this.saving = true
+        const body = this.payload()
+        return apiFetch('./api/app-sync', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        })
+          .then((response) => {
+            if (response.status !== 200) {
+              throw new Error(response.statusText)
+            }
+            this.original = JSON.stringify(body)
+            notifyKey.success('app_sync.saved')
+          })
+          .catch(() => notifyKey.error('app_sync.save_failed'))
+          .finally(() => {
+            this.saving = false
+          })
+      },
+      listedCount(category) {
+        if (category.mode === 'all') {
+          return category.apps.length
+        }
+        return category.mode === 'none' ? 0 : category.apps.filter((entry) => this.checked[entry.id]).length
+      },
+      filteredApps(category) {
+        const query = this.searchQuery.trim().toLowerCase()
+        return query ? category.apps.filter((entry) => entry.name.toLowerCase().includes(query)) : category.apps
+      },
+      /**
+       * Check or clear every application that the current search shows.
+       */
+      setAll(category, value) {
+        for (const entry of this.filteredApps(category)) {
+          this.checked[entry.id] = value
+        }
+      },
+    },
+  })
+
+  initApp(app)
+</script>

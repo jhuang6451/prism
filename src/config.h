@@ -9,7 +9,9 @@
 #include <chrono>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 // local includes
@@ -351,12 +353,118 @@ namespace config {
     std::vector<std::string> csrf_allowed_origins;  ///< Additional origins allowed by CSRF validation.
   };
 
+  /**
+   * @brief How one category of discovered applications is exposed to clients.
+   */
+  enum class app_sync_mode_e {
+    all,  ///< Every discovered application of the category is listed.
+    selected,  ///< Only the applications named in app_sync_t::selected are listed.
+    none  ///< The category is not listed.
+  };
+
+  /**
+   * @brief Which discovered applications are synced into the client application list.
+   *
+   * Every field maps to one key of the configuration file (`app_sync_steam`,
+   * `app_sync_flatpak`, `app_sync_system` and `app_sync_selected`).
+   */
+  struct app_sync_t {
+    app_sync_mode_e steam;  ///< Mode for installed Steam games.
+    app_sync_mode_e flatpak;  ///< Mode for Flatpak GUI applications.
+    app_sync_mode_e system;  ///< Mode for the other (non-Flatpak) desktop GUI applications.
+    std::vector<std::string> selected;  ///< Application IDs (`steam:730`, `flatpak:org.example.App`, `system:app`) listed by the `selected` mode.
+  };
+
   extern video_t video;
   extern audio_t audio;
   extern stream_t stream;
   extern nvhttp_t nvhttp;
   extern input_t input;
   extern prism_t prism;
+
+  /**
+   * @brief Get the configuration name of an application sync mode.
+   *
+   * @param mode Mode to describe.
+   * @return `all`, `selected` or `none`.
+   */
+  std::string_view app_sync_mode_name(app_sync_mode_e mode);
+
+  /**
+   * @brief Parse the configuration name of an application sync mode.
+   *
+   * @param name Mode name; case and surrounding blanks are ignored.
+   * @return The mode, or no value for an unknown name.
+   */
+  std::optional<app_sync_mode_e> parse_app_sync_mode(std::string_view name);
+
+  /**
+   * @brief Check whether a string is a valid application ID for `app_sync_selected`.
+   *
+   * Valid IDs are `steam:<digits>`, `flatpak:<name>` or `system:<name>`, where the
+   * name only has letters, digits and `._+@-` so it survives the configuration file syntax.
+   *
+   * @param id Candidate application ID.
+   * @return True when the ID can be written to and read from the configuration file.
+   */
+  bool valid_app_id(std::string_view id);
+
+  /**
+   * @brief Read the `app_sync_*` options from parsed configuration entries.
+   *
+   * Unknown mode names and invalid application IDs are skipped with a warning. Options
+   * that are absent leave the matching field unchanged.
+   *
+   * @param vars Parsed configuration entries; the consumed keys are erased.
+   * @param settings Settings updated in place.
+   */
+  void parse_app_sync(std::unordered_map<std::string, std::string> &vars, app_sync_t &settings);
+
+  /**
+   * @brief Re-read the app sync options from the configuration file.
+   *
+   * The file is the source of truth: options that are missing from it get their
+   * defaults. Nothing changes when the file does not exist or cannot be read.
+   *
+   * @return True when the file was read and the settings were replaced.
+   */
+  bool reload_app_sync();
+
+  /**
+   * @brief Get a consistent copy of the application sync settings.
+   *
+   * @return The current settings; safe to call while the Web UI changes them.
+   */
+  app_sync_t app_sync_snapshot();
+
+  /**
+   * @brief Replace the live application sync settings.
+   *
+   * @param settings New settings; invalid or duplicate application IDs are dropped.
+   */
+  void set_app_sync(app_sync_t settings);
+
+  /**
+   * @brief Render application sync settings as configuration file options.
+   *
+   * @param settings Settings to render.
+   * @return `(key, value)` pairs in file order, ready for set_options().
+   */
+  std::vector<std::pair<std::string, std::string>> app_sync_options(const app_sync_t &settings);
+
+  /**
+   * @brief Update options in configuration file text and keep everything else as is.
+   *
+   * The first occurrence of a key is replaced in place (an inline comment on that
+   * line is dropped), later duplicates are removed, and keys that are not in the file
+   * yet are appended. An empty value removes the key. Comments, blank lines and unrelated
+   * options, including multi-line lists, are left untouched.
+   *
+   * @param content Current configuration file text.
+   * @param options `(key, value)` pairs to set.
+   * @return The updated configuration file text.
+   */
+  std::string set_options(std::string_view content, const std::vector<std::pair<std::string, std::string>> &options);
 
   /**
    * @brief Parse serialized text into the corresponding runtime representation.

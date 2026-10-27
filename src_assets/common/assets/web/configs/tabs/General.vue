@@ -160,6 +160,49 @@ function removeCmd(index) {
               v-model="config.system_tray"
               default="true"
     ></Checkbox>
+
+    <!-- App Sync: steam -->
+    <div class="mb-3">
+      <label for="app_sync_steam" class="form-label">{{ $t('config.app_sync_steam') }}</label>
+      <select id="app_sync_steam" class="form-select" v-model="config.app_sync_steam">
+        <option value="all">{{ $t('config.app_sync_mode_all') }}</option>
+        <option value="selected">{{ $t('config.app_sync_mode_selected') }}</option>
+        <option value="none">{{ $t('config.app_sync_mode_none') }}</option>
+      </select>
+      <div class="form-text">{{ $t('config.app_sync_steam_desc') }}</div>
+    </div>
+
+    <!-- App Sync: flatpak -->
+    <div class="mb-3">
+      <label for="app_sync_flatpak" class="form-label">{{ $t('config.app_sync_flatpak') }}</label>
+      <select id="app_sync_flatpak" class="form-select" v-model="config.app_sync_flatpak">
+        <option value="all">{{ $t('config.app_sync_mode_all') }}</option>
+        <option value="selected">{{ $t('config.app_sync_mode_selected') }}</option>
+        <option value="none">{{ $t('config.app_sync_mode_none') }}</option>
+      </select>
+      <div class="form-text">{{ $t('config.app_sync_flatpak_desc') }}</div>
+    </div>
+
+    <!-- App Sync: system -->
+    <div class="mb-3">
+      <label for="app_sync_system" class="form-label">{{ $t('config.app_sync_system') }}</label>
+      <select id="app_sync_system" class="form-select" v-model="config.app_sync_system">
+        <option value="all">{{ $t('config.app_sync_mode_all') }}</option>
+        <option value="selected">{{ $t('config.app_sync_mode_selected') }}</option>
+        <option value="none">{{ $t('config.app_sync_mode_none') }}</option>
+      </select>
+      <div class="form-text">{{ $t('config.app_sync_system_desc') }}</div>
+    </div>
+
+    <!-- App Sync: selected applications -->
+    <div class="mb-3">
+      <label for="app_sync_selected" class="form-label">{{ $t('config.app_sync_selected') }}</label>
+      <input type="text" class="form-control font-monospace" id="app_sync_selected" placeholder="[steam:730, flatpak:org.mozilla.firefox]" v-model="config.app_sync_selected" />
+      <div class="form-text">
+        {{ $t('config.app_sync_selected_desc') }}
+        <a href="./app-sync">{{ $t('config.app_sync_selected_link') }}</a>
+      </div>
+    </div>
   </div>
 </template>
 

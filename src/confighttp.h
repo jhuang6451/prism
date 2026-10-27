@@ -8,12 +8,14 @@
 #include <filesystem>
 #include <memory>
 #include <string>
+#include <vector>
 
 // lib includes
 #include <nlohmann/json.hpp>
 #include <Simple-Web-Server/server_https.hpp>
 
 // local includes
+#include "app_sync.h"
 #include "thread_safe.h"
 
 /**
@@ -74,6 +76,28 @@ namespace confighttp {
   void browseDirectory(const resp_https_t &response, const req_https_t &request);
   void getLocale(const resp_https_t &response, const req_https_t &request);
   void getCSRFToken(const resp_https_t &response, const req_https_t &request);
+  void getApps(const resp_https_t &response, const req_https_t &request);
+  void getCover(const resp_https_t &response, const req_https_t &request);
+  void getAppSync(const resp_https_t &response, const req_https_t &request);
+  void saveAppSync(const resp_https_t &response, const req_https_t &request);
+
+  /**
+   * @brief Describe the discovered applications and the app sync settings for the App Sync page.
+   *
+   * @param entries Discovered applications.
+   * @param settings Current app sync settings.
+   * @return JSON with one category per group (id, mode, applications) and the selected IDs.
+   */
+  nlohmann::json build_app_sync_state(const std::vector<prism::sync::entry_t> &entries, const config::app_sync_t &settings);
+
+  /**
+   * @brief Validate a Web UI update of the app sync settings and apply it to a copy.
+   *
+   * @param input JSON request body; omitted keys keep their value.
+   * @param settings Settings to update; left unchanged when the input is invalid.
+   * @return An error message, or an empty string on success.
+   */
+  std::string parse_app_sync_update(const nlohmann::json &input, config::app_sync_t &settings);
 
   // Browse helper functions (also exposed for unit testing)
   /**

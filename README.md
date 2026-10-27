@@ -44,6 +44,41 @@ Fresh installs include four ready-made apps:
 - **Desktop Headless** — empty private labwc session
 - **Steam Headless** — headless SteamOS (Big Picture) session
 
+### Desktop application sync
+
+Installed GUI applications are discovered too, so any of them can be launched on its own in
+a private headless session from the client. Prism reads the freedesktop.org `.desktop` entries
+(`src/desktop_apps.*`) under `XDG_DATA_HOME`, `XDG_DATA_DIRS` and, when `XDG_DATA_DIRS` is unset,
+the Flatpak export directories. Entries that are hidden (`NoDisplay`, `Hidden`), need a terminal,
+are excluded for the current desktop (`OnlyShowIn`/`NotShowIn`) or name a missing `TryExec`
+program are skipped, as are Steam, Steam game shortcuts (the Steam sync covers those) and Prism's own launchers.
+The `Exec` line is launched without file arguments, and a PNG `Icon` from the `hicolor` theme,
+`pixmaps`, or an absolute path becomes the box art (SVG-only icons use the default image).
+
+What is listed in the client is chosen per group (Steam games, Flatpak applications, other
+system applications) on the **App Sync** page of the Web UI, and it is stored in the
+configuration file, which can be written by hand just the same:
+
+```ini
+app_sync_steam = all          # all | selected | none   (default: all)
+app_sync_flatpak = selected   # default: selected
+app_sync_system = selected    # default: selected
+app_sync_selected = [         # used by the groups set to "selected"
+  steam:730,
+  flatpak:org.mozilla.firefox,
+  system:org.kde.dolphin
+]
+```
+
+Out of the box every Steam game is listed and no other application is until you select it.
+The file is the source of truth: it is re-read on every client applist request, so edits made
+by hand apply without a restart and an option missing from it has its default. Saving on the
+page rewrites only these four options, so comments and other settings in the file are kept.
+The installed applications are re-scanned on every request too. Synced apps use
+`prism-capture = headless`; an app you define yourself in `apps.json` always wins on name
+collision, which is also how to change one's capture mode or command. Desktop applications do
+not appear in the Applications tab. See [configuration](docs/configuration.md) for details.
+
 ### Steam game sync
 
 Steam is an **optional dependency**. It is required only for Steam game discovery and

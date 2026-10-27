@@ -321,6 +321,151 @@ editing the `conf` file in a text editor. Use the examples as reference.
     </tr>
 </table>
 
+### app_sync_steam
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Which of the installed Steam games found on this host are listed in the client application list.
+            The Web UI page <code>/app-sync</code> edits this option and shows what was found. Changes made to the file are picked up the next time the client loads the application list, so no restart is needed; an option missing from the file has its default.
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            all
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            app_sync_steam = selected
+            @endcode</td>
+    </tr>
+    <tr>
+        <td rowspan="3">Choices</td>
+        <td>all</td>
+        <td>List every one, including ones installed later</td>
+    </tr>
+    <tr>
+        <td>selected</td>
+        <td>List only the ones named in <a href="#app_sync_selected">app_sync_selected</a></td>
+    </tr>
+    <tr>
+        <td>none</td>
+        <td>List none</td>
+    </tr>
+</table>
+
+### app_sync_flatpak
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Which of the Flatpak GUI applications (desktop entries exported by Flatpak) found on this host are listed in the client application list.
+            The Web UI page <code>/app-sync</code> edits this option and shows what was found. Changes made to the file are picked up the next time the client loads the application list, so no restart is needed; an option missing from the file has its default.
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            selected
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            app_sync_flatpak = all
+            @endcode</td>
+    </tr>
+    <tr>
+        <td rowspan="3">Choices</td>
+        <td>all</td>
+        <td>List every one, including ones installed later</td>
+    </tr>
+    <tr>
+        <td>selected</td>
+        <td>List only the ones named in <a href="#app_sync_selected">app_sync_selected</a></td>
+    </tr>
+    <tr>
+        <td>none</td>
+        <td>List none</td>
+    </tr>
+</table>
+
+### app_sync_system
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Which of the other desktop GUI applications (desktop entries that are not exported by Flatpak) found on this host are listed in the client application list.
+            The Web UI page <code>/app-sync</code> edits this option and shows what was found. Changes made to the file are picked up the next time the client loads the application list, so no restart is needed; an option missing from the file has its default. Steam itself and Steam game shortcuts are never listed here because the Steam games cover them.
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            selected
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            app_sync_system = none
+            @endcode</td>
+    </tr>
+    <tr>
+        <td rowspan="3">Choices</td>
+        <td>all</td>
+        <td>List every one, including ones installed later</td>
+    </tr>
+    <tr>
+        <td>selected</td>
+        <td>List only the ones named in <a href="#app_sync_selected">app_sync_selected</a></td>
+    </tr>
+    <tr>
+        <td>none</td>
+        <td>List none</td>
+    </tr>
+</table>
+
+### app_sync_selected
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            The applications that are listed when their group is set to <code>selected</code>
+            (<a href="#app_sync_steam">app_sync_steam</a>, <a href="#app_sync_flatpak">app_sync_flatpak</a>,
+            <a href="#app_sync_system">app_sync_system</a>). Each entry is <code>steam:&lt;appid&gt;</code>,
+            <code>flatpak:&lt;application id&gt;</code> or <code>system:&lt;desktop file id&gt;</code>, where the
+            desktop file id is the name of the <code>.desktop</code> file without the suffix. Entries may be
+            separated by commas or line breaks. IDs of applications that are not installed are kept and ignored,
+            invalid entries are skipped with a warning. Applications defined in <code>apps.json</code> always
+            win over a listed application of the same name. Changes made to the file are picked up the next time the client loads the application list.
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            []
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            app_sync_selected = [
+              steam:730,
+              flatpak:org.mozilla.firefox,
+              system:org.kde.dolphin
+            ]
+            @endcode</td>
+    </tr>
+</table>
+
 ## Input
 
 ### controller

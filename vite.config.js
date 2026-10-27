@@ -53,6 +53,7 @@ export default defineConfig({
         outDir: resolve(assetsDstPath),
         rollupOptions: {
             input: {
+                appsync: resolve(assetsSrcPath, 'app-sync.html'),
                 apps: resolve(assetsSrcPath, 'apps.html'),
                 config: resolve(assetsSrcPath, 'config.html'),
                 index: resolve(assetsSrcPath, 'index.html'),
