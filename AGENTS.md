@@ -34,3 +34,20 @@ If asked to create an issue or pull request, do so in their fork instead of the 
 Never create an issue or pull request in the LizardByte GitHub organization.
 
 Add or update tests for new or modified methods and code. Target 100% coverage on changed code.
+
+On Fedora Linux, build and test with podman following `.github/workflows/fedora-smoke.yml`; see
+`docs/roadmap/03-conventions.md` for the recipe and the full project conventions.
+
+The remote-session upgrade (system service, persistent remote sessions, attach-or-spawn) is planned in
+`docs/roadmap/`. Before working on a roadmap task, read `docs/roadmap/README.md`, the task card in
+`docs/roadmap/04-tasks.md`, and the related decisions in `docs/roadmap/decisions.md`; update the task
+status and docs when the task is done.
+
+Do not change the roadmap's plan without the user's explicit approval. This covers the product
+definition, the architecture, the conventions, the task breakdown (adding, removing, reordering or
+re-scoping tasks), and accepted decisions. Without approval you may only record progress: task
+status, spike reports in `docs/roadmap/spikes/`, test results, the status and findings of questions
+in `docs/roadmap/05-risks-and-testing.md`, and decision tracking in `docs/roadmap/decisions.md`
+(evidence for a proposed ADR, or a new proposed ADR). Never mark an ADR as accepted, superseded or
+rejected yourself. If progress shows that the plan should change, stop and propose the change to the
+user instead of editing the plan.
