@@ -45,7 +45,7 @@
 | 单元测试（gtest） | podman / CI | 状态机、策略、IPC 编解码、状态文件解析、配置解析、HTTP API | 每次提交 |
 | 脚本集成测试（bash，经 gtest 注册） | podman / CI | 会话脚本的就绪、回滚、清理，用桩替代 `systemctl`、`pactl`、`wlr-randr`、`loginctl` | 每次提交 |
 | 容器功能测试 | podman | 安装产物、Web UI API、配置迁移（不涉及 logind） | 每个 PR |
-| VM 端到端 | libvirt/QEMU 中的 Fedora KDE（T0.3） | PAM 会话、prismd/helper/代理协同、无人登录远程、注销清理、安装升级卸载 | 每个里程碑，以及涉及系统服务的 PR |
+| VM 端到端 | libvirt/QEMU 中的 Fedora KDE（T0.3，用法见[项目规范](03-conventions.md#4-构建)） | PAM 会话、prismd/helper/代理协同、无人登录远程、注销清理、安装升级卸载 | 每个里程碑，以及涉及系统服务的 PR |
 | 硬件手动测试 | 用户的 Fedora + KDE + NVIDIA 主机，Moonlight 与 Iris 客户端 | 延迟、HDR、NVENC、手柄、Steam、真实使用 | 每个里程碑验收 |
 
 ## 4. 测试要点

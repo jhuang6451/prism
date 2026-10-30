@@ -1,0 +1,33 @@
+#cloud-config
+# Seed for the Prism end-to-end test VM. @SSH_PUBKEY@ is replaced by prism-vm.sh.
+hostname: prism-e2e
+users:
+  - name: prism
+    groups: [wheel]
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    shell: /bin/bash
+    lock_passwd: true
+    ssh_authorized_keys:
+      - @SSH_PUBKEY@
+ssh_pwauth: false
+package_update: true
+packages:
+  - '@kde-desktop-environment'
+  - sddm
+  - flatpak
+  - pipewire
+  - wireplumber
+  - labwc
+  - wlr-randr
+  - xorg-x11-server-Xwayland
+  - mesa-dri-drivers
+  - openssl
+  - miniupnpc
+  - curl
+  - jq
+  - pulseaudio-utils
+runcmd:
+  - systemctl set-default graphical.target
+  - systemctl enable --force sddm.service
+  - [ sh, -c, 'flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo && flatpak install -y --noninteractive flathub com.moonlight_stream.Moonlight || true' ]
+  - touch /var/lib/prism-vm-provisioned

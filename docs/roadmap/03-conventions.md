@@ -63,6 +63,18 @@
      -DPRISM_ASSETS_DIR=share/prism -DPRISM_ENABLE_CUDA=OFF ...`）、`cmake --build --parallel`，再
      `cd cmake-build-podman/tests && xvfb-run --auto-servernum ./test_prism`。
   4. 已知与本规划无关的失败：`DownloadFileTests/*`（容器无网络）；约 9 个 GPU/硬件测试会跳过。
+- **VM 端到端环境**（T0.3）：容器没有 logind、PAM 会话，系统级功能用 `tests/vm/` 下的 Fedora 44 + KDE
+  虚拟机测试（libvirt `qemu:///session`，无需 root；需要 `/dev/kvm`、`virt-install`、`xorriso`）：
+  1. `tests/vm/prism-vm.sh create`：下载 Fedora Cloud 镜像，生成 overlay 磁盘和 cloud-init 种子。
+  2. `up` 启动并等待 SSH（`127.0.0.1:2222`，用户 `prism`，仅密钥登录）；`provision` 等待 cloud-init
+     装完 KDE、SDDM 和 Moonlight flatpak（首次约十几分钟）。
+  3. `PRISM_INSTALL_IMAGE=<构建镜像> tests/vm/prism-vm.sh install`：在构建镜像里对 `cmake-build-podman`
+     执行 `cmake --install`（构建树记录的是容器路径），再把产物解到 guest。
+  4. `smoke` 在 guest 里跑 `tests/vm/smoke.sh`，每项输出 `PASS`/`FAIL`/`SKIP`，日志收集到
+     `~/.cache/prism-vm/logs`。`SKIP` 项依赖系统服务和远程会话，随对应任务落地后必须变为 `PASS`。
+  5. `all` 一条命令完成以上全部；`down` 关机，`destroy` 删除 VM（保留镜像缓存）。
+  说明见 `tests/vm/README.md`；新增的 VM 测试项加到 `smoke.sh` 并在 [05 文档](05-risks-and-testing.md)
+  登记。
 - **Windows**：用 msys2 ucrt64，命令前加
   `C:\msys64\msys2_shell.cmd -defterm -here -no-start -ucrt64 -c`。
 - Web UI：`cmake -B cmake-build-prism -G Ninja -S . --target web-ui && ninja -C cmake-build-prism web-ui`，
