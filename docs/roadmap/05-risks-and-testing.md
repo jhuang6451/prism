@@ -6,23 +6,23 @@
 
 | 编号 | 问题 | 当前假设 / 建议 | 验证 | 状态 |
 |---|---|---|---|---|
-| Q1 | 远程会话用嵌套结构还是直连 KWin headless？ | 倾向嵌套：采集、输入、HDR 只实现一次，且已有外层；需实测多一层合成的代价 | S1、S2 → ADR-0005 | 待验证 |
-| Q2 | HDR 能否穿过两层合成器？ | 需要外层（prism-labwc）和内层（KWin 嵌套后端）都支持 `color-management-v1` 并正确传递；不确定 | S1 | 待验证 |
-| Q3 | 游戏输入能否穿透：相对指针、指针锁定、快捷键抑制（`keyboard-shortcuts-inhibit`）、光标隐藏 | 外层需支持并转发给内层；labwc 对这些协议的支持需逐项确认 | S1、S6 | 待验证 |
+| Q1 | 远程会话用嵌套结构还是直连 KWin headless？ | 倾向嵌套：采集、输入、HDR 只实现一次，且已有外层；需实测多一层合成的代价 | S1、S2 → ADR-0005 | 待验证（VM 与真机均见 spikes：两种结构的桌面、采集、NVENC 都可行；HDR 两者都拿不到；嵌套的输入现成，直连需新写 EIS 转发桥；指针锁定在嵌套下要手动按右 Ctrl；证据已给 ADR-0005，由用户决定） |
+| Q2 | HDR 能否穿过两层合成器？ | 需要外层（prism-labwc）和内层（KWin 嵌套后端）都支持 `color-management-v1` 并正确传递；不确定 | S1 | 真机已测，结论为否（当前 KWin 6.7.5）：内层嵌套输出报 HDR/WCG incapable，手机 Moonlight 只得 SDR；外层直连 HDR 目测正常。成因在 KWin 后端未标出 HDR 能力，补丁方案未验证，已暂缓，见 spikes/S1 的 R16 |
+| Q3 | 游戏输入能否穿透：相对指针、指针锁定、快捷键抑制（`keyboard-shortcuts-inhibit`）、光标隐藏 | 外层需支持并转发给内层；labwc 对这些协议的支持需逐项确认 | S1、S6 | 真机已测：相对指针、快捷键（Super、Alt+Tab）、光标、手柄可用；指针锁定会冻住外层光标，按右 Ctrl 可绕开（R10）；原生 Wayland 游戏的指针锁定未测 |
 | Q4 | 光标：由谁绘制、采集时是否嵌入 | 外层画内层设置的光标表面，screencopy 带光标；需确认无双光标、无延迟 | S1 | 待验证 |
-| Q5 | 远程会话存在时本地以同一用户登录 | 必然冲突（Plasma 用 systemd 用户单元启动自身组件）；Prism 只能通过 logind 事后感知 | S4 → M4 | 待验证 |
-| Q6 | 无座位会话的 polkit 判定 | 远程会话不算 local/active，`allow_active` 的操作会要求管理员认证；需 Prism 自带受限规则 | S3 → T3.8 | 待验证 |
+| Q5 | 远程会话存在时本地以同一用户登录 | 必然冲突（Plasma 用 systemd 用户单元启动自身组件）；Prism 只能通过 logind 事后感知 | S4 → M4 | 待验证（S4 已在 VM 实测，见 spikes/S4：SDDM 不阻止，第二个 Plasma 静默失败，`SessionNew` 可提前感知） |
+| Q6 | 无座位会话的 polkit 判定 | 远程会话不算 local/active，`allow_active` 的操作会要求管理员认证；需 Prism 自带受限规则 | S3 → T3.8 | 待验证（S3 已在 VM 实测，见 spikes/S3：无座位会话的挂载、网络、关机均为 auth_admin） |
 | Q7 | 设备与用户的认证 | 配对只证明设备可信；需设备↔用户绑定，外加可选 PIN 或系统密码 | ADR-0002 | 已决定方向 |
 | Q8 | 加密家目录（systemd-homed、LUKS 家目录） | 登录前无法挂载，远程新建会话需要用户密码参与解锁；先列为不支持，文档说明 | S3 | 待验证 |
 | Q9 | Steam 大屏幕的形态 | 倾向"桌面会话里的应用"，以统一"一个用户一个会话"；需对比 gamescope 的帧控制和 HDR 优势 | S6 → ADR-0008 | 待验证 |
-| Q10 | Moonlight 的"退出"语义 | 倾向"退出 = 断开，会话保留"；原版 Moonlight 不可改，Iris 可配合 | S5 → ADR-0007 | 待验证 |
+| Q10 | Moonlight 的"退出"语义 | 倾向"退出 = 断开，会话保留"；原版 Moonlight 不可改，Iris 可配合 | S5 → ADR-0007 | 待验证（S5 服务端部分见 spikes/S5：cancel 即退出，改 cancel 语义即可；客户端待实测） |
 | Q11 | 系统服务怎样访问用户的 GPU、音频、Wayland | 不访问：这些都由以用户身份运行在会话内的代理完成 | ADR-0002 | 已决定 |
 | Q12 | AppImage 与系统级安装 | 系统模式安装到 `/opt/prism`，单元和 PAM/polkit 文件由安装脚本写入；需 root | T3.6 | 待设计 |
 | Q13 | Flatpak 应用与 portal | 远程会话是用户唯一会话，文档 portal 等按正常方式工作；接入模式下即本地会话本身，无问题 | T2.5 | 待验证 |
-| Q14 | 同一用户的配置文件互写（两个桌面同时写 `~/.config`） | 由"一个用户一个会话"规则避免；只在 Q5 的异常情况下出现 | S4 | 待验证 |
-| Q15 | 无座位会话中的 PipeWire/WirePlumber | WirePlumber 可能因会话非活动而不打开 ALSA 设备；远程会话只用空 sink，影响有限 | S3 | 待验证 |
+| Q14 | 同一用户的配置文件互写（两个桌面同时写 `~/.config`） | 由"一个用户一个会话"规则避免；只在 Q5 的异常情况下出现 | S4 | 待验证（S4 实验 A 确认两套 Plasma 共享配置，未测写入冲突） |
+| Q15 | 无座位会话中的 PipeWire/WirePlumber | WirePlumber 可能因会话非活动而不打开 ALSA 设备；远程会话只用空 sink，影响有限 | S3 | 待验证（S3 的 VM 只验证空 sink 与 PipeWire 可用，真实声卡待真机） |
 | Q16 | 与上游 Sunshine 同步的冲突面 | 新模块独立、接缝最少；每个里程碑演练一次同步 | 架构第 9 节 | 已决定 |
-| Q17 | KWallet 等密钥库在远程会话里的解锁 | 通过 PAM 登录时可由 `pam_kwallet5` 解锁；只有 PIN 时可能无法自动解锁 | S3 | 待验证 |
+| Q17 | KWallet 等密钥库在远程会话里的解锁 | 通过 PAM 登录时可由 `pam_kwallet5` 解锁；只有 PIN 时可能无法自动解锁 | S3 | 待验证（S3：无密码时 pam_kwallet5 不解锁；其余待测） |
 | Q18 | 代理崩溃、外层或内层崩溃时的恢复 | 代理可重启，会话保留；合成器崩溃则会话结束 | T2.3 | 待验证 |
 
 ## 2. 风险登记

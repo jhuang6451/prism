@@ -30,7 +30,7 @@ M4：依赖 M3（T4.1 可在 M2 末期以用户级方式先做）
 - 验收：用户审阅通过；文档无尾随空格，`scripts/lint.sh` 通过。
 
 ### T0.2 性能与行为基线
-- 依赖：T0.1　规模：S　状态：未开始
+- 依赖：T0.1　规模：S　状态：搁置（2026-10-31 用户决定跳过性能测试；M1 不再与基线对比，延迟/占用只记录绝对值）
 - 内容：在当前版本上测量并记录（写入 `spikes/T0.2-baseline.md`）：
   - Steam Headless 和 Desktop Headless 的启动耗时（点击到首帧）；
   - 串流延迟：Moonlight/Iris 统计里的主机处理延迟、网络延迟、解码延迟（1080p60、4K60、4K120 HDR 各一组）；
@@ -54,7 +54,7 @@ M4：依赖 M3（T4.1 可在 M2 末期以用户级方式先做）
 达到产品质量，但不得合入 `master`。
 
 ### S1 嵌套 Plasma 运行在 prism-labwc 中
-- 依赖：T0.2　规模：M　状态：未开始
+- 依赖：T0.2（已搁置）、T0.3　规模：M　状态：待验收（VM 与真机均已测：SDR 游戏、输入、手柄、HDR 结论见 `spikes/S1-nested-plasma.md`；HDR 与性能留待主干之后）
 - 前提：先注销本地 KDE 会话（例如通过 SSH 操作，或开启 linger），或使用另一个测试用户，避免同一用户
   两个 Plasma 冲突。
 - 步骤：
@@ -68,7 +68,7 @@ M4：依赖 M3（T4.1 可在 M2 末期以用户级方式先做）
 - 产出：ADR-0005 的数据。
 
 ### S2 直连 KWin headless
-- 依赖：T0.2　规模：M　状态：未开始
+- 依赖：T0.2　规模：M　状态：待验收（VM 与真机采集部分完成；真机输入需新写 EIS 转发桥，已按用户决定不做，见 `spikes/S2-direct-kwin-headless.md`）
 - 步骤：`kwin_wayland --virtual --width W --height H` 起 Plasma；采集用现有 `kwingrab.cpp`
   （zkde_screencast）；输入试验 EIS（KWin 的远程桌面接口或 RemoteDesktop portal）和
   `org_kde_kwin_fake_input` 两条路径。
@@ -77,7 +77,7 @@ M4：依赖 M3（T4.1 可在 M2 末期以用户级方式先做）
 - 产出：ADR-0005 的数据。
 
 ### S3 由系统单元为用户创建无座位会话
-- 依赖：T0.3　规模：M　状态：未开始
+- 依赖：T0.3　规模：M　状态：待验收（VM 部分完成，见 `spikes/S3-seatless-session.md`）
 - 步骤：写一个临时的 root 程序或 PAM 测试工具（如 `pamtester` 的会话模式），在无人登录时为测试用户
   打开 `pam_systemd` 会话（`Type=wayland`、`Class=user`、无座位、`Remote=yes`），在其中启动外层和
   内层。
@@ -88,7 +88,7 @@ M4：依赖 M3（T4.1 可在 M2 末期以用户级方式先做）
 - 产出：ADR-0002 细化（helper 设计、PAM 栈）、问题 Q6/Q8/Q15 的结论。
 
 ### S4 远程会话存在时本地登录
-- 依赖：S3　规模：S　状态：未开始
+- 依赖：S3　规模：S　状态：待验收（VM 部分完成，见 `spikes/S4-local-login-with-remote.md`）
 - 步骤：远程 Plasma 会话处于断开状态，在物理座位通过 SDDM（以及 Plasma Login Manager，如可用）以同一
   用户登录。
 - 验证点：显示管理器是否允许登录；第二个 Plasma 的具体故障（systemd 用户单元冲突、配置文件互写、
@@ -96,7 +96,7 @@ M4：依赖 M3（T4.1 可在 M2 末期以用户级方式先做）
 - 产出：M4 的策略选项和可行性。
 
 ### S5 Moonlight 退出/恢复语义
-- 依赖：T0.2　规模：S　状态：未开始
+- 依赖：T0.2　规模：S　状态：进行中（服务端部分完成，客户端实测待做，见 `spikes/S5-quit-resume-semantics.md`）
 - 步骤：在 Moonlight（Android、PC）和 Iris 上测试：退出时服务器不结束应用会发生什么；
   launch 时服务器返回已有会话的行为；resume 流程；切换到另一应用时客户端的提示。
 - 产出：ADR-0007（"退出 = 断开保留会话"是否可行，客户端是否需要配合修改；Iris 可改，原版 Moonlight
