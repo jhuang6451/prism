@@ -4,6 +4,10 @@
  */
 #pragma once
 
+// standard includes
+#include <algorithm>
+#include <string>
+
 namespace nvenc {
 
   /**
@@ -23,6 +27,20 @@ namespace nvenc {
     driver_decides,  ///< Let driver decide
     force_enabled,  ///< Force-enable
   };
+
+  /**
+   * @brief Convert a Prism NVENC quality preset to the FFmpeg preset name.
+   *
+   * FFmpeg's numeric NVENC preset values are not stable across releases (P1 was 12 and is 3 in newer
+   * releases), but the `p1` to `p7` names are. Passing the name keeps the preset correct with any
+   * FFmpeg build.
+   *
+   * @param quality_preset Prism quality preset, 1 (fastest) to 7 (slowest). Values outside the range are clamped.
+   * @return FFmpeg preset name, from `p1` to `p7`.
+   */
+  inline std::string ffmpeg_preset_from_quality(int quality_preset) {
+    return "p" + std::to_string(std::clamp(quality_preset, 1, 7));
+  }
 
   /**
    * @brief NVENC encoder configuration.
