@@ -100,3 +100,34 @@ VM 里已验证 EIS 本身可用（含相对指针设备）；真机上没有测
 - 每项都要先有输入通路才能测；这需要写代码（一个 EIS 转发桥），属于范围问题，等用户决定。
 - 用户决定（2026-11-02）：S2 真机评估到此为止，不写 EIS 桥；指针锁定对比、延迟、性能和 HDR 都留到主干功能完成之后。
   HDR 的后续方向（给 KWin 嵌套后端打补丁等）记在 `S1-nested-plasma.md` 的 R16 末尾；`--virtual` 后端的补丁可行性更低。
+
+## KWin 源码核查：直连结构要补什么（2026-11-02）
+
+用户问"放弃 `prism-labwc`、直接修补 KWin"是否可行、是否能带来性能提升。为此读了 KWin v6.7.5（本机版本）的源码，并对照了
+上游 master（提交 `4d926a3`，2026-11-02）。只读代码，没有编译或运行。
+
+### HDR 的缺口在 KWin，Prism 一侧基本现成
+
+- 虚拟后端的输出（`src/backends/virtual/virtual_output.cpp`）只声明 `Capability::CustomModes`，`applyChanges` 不处理
+  `highDynamicRange`、`wideColorGamut` 等字段；EGL 交换链固定 `DRM_FORMAT_XRGB8888`（`virtual_egl_backend.cpp`）。
+  DRM 输出里对应的色彩描述逻辑（`DrmOutput::createColorDescription`）约 90 行，依赖 EDID。
+- ScreenCast（`src/plugins/screencast/`）：`screencaststream.cpp` 的格式表全是 8 位；`OutputScreenCastSource` 的格式固定
+  `DRM_FORMAT_ARGB8888`；`ScreencastLayer` 的渲染目标是默认色彩空间（sRGB），也不向 PipeWire 声明色彩信息。
+- DRM 后端的虚拟输出（`drm_virtual_output.cpp`，Prism 的 Desktop (Virtual) 用的就是它）同样只声明 `CustomModes`。
+  **推论（未实测）：在 6.7.5 上，`prism-virtual-start.sh` 里的 `hdr.enable` 大概率失败，接入本地会话的串流也只能是 SDR。**
+  所以 S1 R16 末尾列的"virtual 模式加本地桌面"这条 HDR 路线在 6.7.5 上走不通。
+- 上游 master 把虚拟输出的能力改成了构造参数，但还没有任何地方传入 HDR/WCG，ScreenCast 也仍是 8 位。
+- Prism 的 `src/platform/linux/pipewire.cpp` 已有 10 位格式映射，收到 BT.2020/PQ 时 `is_hdr()` 为真，所以 KWin 一侧补齐后
+  `kwingrab` 基本不用改。ScreenCast 的 HDR 补丁能同时修好直连结构和接入本地会话的 HDR。
+
+### 合成次数
+
+`OutputScreenCastSource::render()` 会把场景重新渲染到录屏缓冲区，而虚拟输出自己的交换链照常合成，所以直连结构每帧合成
+两次，不是一次。嵌套约三次（内层合成、外层合成、screencopy 拷贝），都是全屏贴图量级。真机上外层合成器的显存约 21 MiB、
+CPU 约 22% 单核（S1 R13）。结论：直连不会带来明显的 GPU 性能提升；它的收益在于没有嵌套后端的 60Hz、指针锁定和
+断连崩溃问题（S1 R8、R10、R14），这些都未在直连下用游戏实测。
+
+### 分发
+
+补过的 `kwin_wayland` 与系统 Plasma 的 libkwin、KDecoration、Qt/KF6 ABI 绑定，无法随 Prism 的 AppImage 分发，在 Kinoite 上还要
+`rpm-ostree override`。可持续的路径只有向 KWin 上游贡献。用户据此选定嵌套结构（ADR-0005），KWin 补丁只作为上游贡献（T5.9）。

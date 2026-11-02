@@ -76,7 +76,8 @@ P3 不是"少了某个功能"，而是 headless 会话被定位成本地会话�
   logind ── user@1000.service ───────────────────────────┤
               ├─ 远程会话（Class=user, Type=wayland, 无座位, Remote=yes）
               │    外层：prism-labwc（headless 输出, screencopy, 虚拟输入）
-              │    内层：嵌套的 Plasma（startplasma-wayland, WAYLAND_DISPLAY=外层）  ← 待 S1/S2 定
+              │    内层：嵌套的 Plasma（startplasma-wayland, WAYLAND_DISPLAY=外层）  ← ADR-0005 已选嵌套
+              │    旁路：Steam 大屏幕直接作为外层客户端（ADR-0008，待 S6）
               └─ 或：本地会话（座位 seat0, KWin DRM）+ 虚拟输出（接入模式）
 ```
 
@@ -153,6 +154,7 @@ logind 会话（PAM 创建）
    ├─ prism-outer@<id>.service          外层：prism-labwc，WLR_BACKENDS=headless，HEADLESS-1
    ├─ prism-input-bridge@<id>.service   虚拟指针/键盘（沿用现有输入桥）
    ├─ prism-desktop@<id>.service        内层桌面：WAYLAND_DISPLAY=<外层 socket> startplasma-wayland
+   ├─ prism-steam@<id>.service          旁路：steam -gamepadui，直接连外层（按需启动，待 S6 定形）
    └─ prism-agent@<id>.service          会话代理
 ```
 
@@ -160,14 +162,16 @@ logind 会话（PAM 创建）
 - **环境**：内层桌面自己执行 `dbus-update-activation-environment --systemd`（Plasma 会这样做），
   portal 后端按 `XDG_CURRENT_DESKTOP=KDE` 选择，对话框显示在内层桌面里。因为这是用户唯一的会话，
   **不使用私有 D-Bus**。私有总线只保留给过渡期的隔离 headless 应用模式。
-- **待定（ADR-0005）**：另一种结构是不要外层，直接 `kwin_wayland --virtual` 作为 headless 合成器，
-  采集用已有的 `kwingrab.cpp`，输入走 EIS 或 KWin fake input。两种结构的取舍：
+- **游戏旁路（ADR-0008，待 S6）**：Steam 大屏幕和游戏不放进内层桌面，而是直接作为外层的客户端运行，与内层窗口
+  并列，属于同一个 logind 会话和同一条会话总线。外层提供 HDR、指针约束和客户端刷新率，绕开 KWin 嵌套后端的限制。
+- **已选嵌套（ADR-0005，2026-11-02）**：另一种结构是不要外层，直接 `kwin_wayland --virtual` 作为 headless 合成器，
+  采集用已有的 `kwingrab.cpp`，输入走 EIS 或 KWin fake input。下表是规划时的取舍，实测结果见 ADR-0005：
 
 | 维度 | 嵌套（外层 prism-labwc + 内层桌面） | 直连 KWin headless |
 |---|---|---|
 | 桌面环境无关性 | 好：采集/输入/HDR 只对外层实现一次 | 差：每种桌面各写一套采集和输入 |
-| 合成次数 | 多一次（内层全屏时开销预计很小，需实测） | 一次 |
-| HDR | 需两层都支持色彩管理协议并正确传递 | 取决于 KWin 虚拟后端的 HDR 能力 |
+| 合成次数 | 约三次：内层合成、外层合成、screencopy 拷贝（真机外层显存约 21 MiB） | 两次：虚拟输出自身合成，加 ScreenCast 重新渲染场景（KWin 6.7.5 源码，见 S2 报告） |
+| HDR | 内层嵌套后端不报 HDR 能力（S1 R16）；直接跑在外层的客户端有 HDR | 虚拟后端不报 HDR，ScreenCast 只有 8 位 sRGB（S2） |
 | 游戏输入（相对指针、指针锁定、快捷键抑制） | 两层都要支持并透传 | 只需 KWin 支持 |
 | 现有代码复用 | `wlgrab.cpp`、输入桥、HDR 补丁 | `kwingrab.cpp`；输入需新写 |
 | 分辨率变化 | 外层改模式，内层窗口随之全屏 | 直接改虚拟输出 |
@@ -201,7 +205,7 @@ logind 会话（PAM 创建）
 | 事件 | 来源 | 处理 |
 |---|---|---|
 | launch/resume | 客户端 → prismd | 走策略；attach 或 spawn |
-| quit | 客户端 → prismd | 默认 detach（ADR-0007 待定） |
+| quit | 客户端 → prismd | 默认 detach，可配置为 end（ADR-0007） |
 | 串流断开 | 代理 → prismd | detach |
 | 会话内注销 | logind 会话移除 / 内层桌面退出 | ending；若在串流则结束串流 |
 | 代理崩溃 | systemd | 会话保留为 detached；下次 attach 重启代理 |
@@ -261,6 +265,7 @@ M3 迁移的工作量。
 | prismd ↔ 代理 | 代理冒充、跨用户操作 | `SO_PEERCRED`；代理只能访问自己的会话 |
 | 会话 → 宿主 | 远程会话获得不应有的权限 | 远程会话是普通用户会话；polkit 规则只放开明确列出的操作（见问题 Q6） |
 | 持久化 | 凭据泄露 | `/var/lib/prism` 0700；秘密文件 0600 |
+| 远程输入 → 本地座位 | 远程会话的设备授权失败时，Prism 的 passthrough 键鼠挂在 seat0，被本地合成器或登录界面当普通输入消费（S1 R8、S2 R3 实测） | 设备授权不依赖 `uaccess`（T2.10）；输入桥打不开设备时失败关闭，远程输入不得到达本地座位 |
 
 系统单元启用 systemd 加固：`ProtectSystem=strict`、`ProtectHome=yes`（prismd）、
 `NoNewPrivileges=yes`、`CapabilityBoundingSet=` 最小化、`RestrictAddressFamilies` 等。
@@ -276,7 +281,7 @@ M3 迁移的工作量。
 |---|---|---|
 | 现在 | 用户级 `prism.service`，按应用启停的 headless | — |
 | M2 | 仍是用户级服务；引入会话对象、策略、`session` 模式、远程会话组成（外层 + 内层）、接入本地会话 | 远程会话在 M2 只能在"本地没有图形会话但用户管理器在运行"时新建（例如开启 linger 或 SSH 登录后），用于提前验证会话模型 |
-| M3 | 拆出 `prismd` 和 helper，用 PAM 创建会话；用户级服务转为会话代理 | 提供迁移命令，搬迁配置和凭据 |
+| M3 | 拆出 `prismd` 和 helper，用 PAM 创建会话；用户级服务转为会话代理 | 提供迁移命令，搬迁配置和凭据；迁移后移除用户级单元，此后只保留系统级部署（ADR-0009） |
 | M4 起 | 共存策略、体验打磨 | — |
 
 ## 9. 上游同步策略
