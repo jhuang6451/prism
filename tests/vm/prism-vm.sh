@@ -136,9 +136,12 @@ cmd_install() {
   else
     DESTDIR="$stage" cmake --install "$BUILD_DIR" --prefix /usr >/dev/null
   fi
-  tar -C "$stage" -czf "$DIR/prism-stage.tar.gz" .
+  # Own everything as root and never touch existing directories: extracting "./" as root with the host
+  # user's mode and uid would otherwise leave / (mode 700), /usr and /usr/bin owned by the guest user.
+  tar -C "$stage" --owner=0 --group=0 --numeric-owner -czf "$DIR/prism-stage.tar.gz" .
   guest_ssh 'cat > /tmp/prism-stage.tar.gz' <"$DIR/prism-stage.tar.gz"
-  guest_ssh 'sudo tar -C / -xzf /tmp/prism-stage.tar.gz && sudo systemctl daemon-reload'
+  guest_ssh 'sudo tar -C / --no-overwrite-dir --no-same-permissions -xzf /tmp/prism-stage.tar.gz &&
+    sudo systemctl daemon-reload'
   log "installed into guest"
 }
 
